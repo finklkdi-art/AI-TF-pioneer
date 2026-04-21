@@ -1,0 +1,8 @@
+pandas          # 데이터 분석 및 엑셀 핸들링
+openpyxl        # 엑셀 파일 읽기/쓰기 지원
+xlsxwriter      # 엑셀 내 이미지 삽입 및 서식 제어
+python-docx     # 워드(Word) 파일 처리
+pdfplumber      # PDF 데이터 추출(표, 텍스트)
+Pillow          # 이미지 저용량화 및 전처리
+streamlit       # 웹 UI/UX 구축 및 배포
+pycryptodome    # (필요시) 보안 및 암호화 처리
