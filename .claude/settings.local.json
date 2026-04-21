@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python -c \"from pptx import Presentation; print\\('python-pptx OK'\\)\")",
+      "Bash(pip install *)",
+      "Bash(python generate_roadmap.py)",
+      "Bash(git add *)",
+      "Bash(git rm *)"
+    ]
+  }
+}
