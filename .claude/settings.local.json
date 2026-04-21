@@ -8,7 +8,9 @@
       "Bash(git rm *)",
       "Bash(git commit *)",
       "Bash(git push *)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(where streamlit *)",
+      "Bash(python -m streamlit --version)"
     ]
   }
 }
