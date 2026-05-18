@@ -1,13 +1,25 @@
 // 휘발성 — 서버에 영속 저장 없음. localStorage 미사용 (Source 9, 10).
 //
-// API base 결정 규칙:
-//   - VITE_API_BASE 가 빈 값이면 same-origin (Vite dev proxy 또는 동일 도메인 deploy)
-//   - 값이 있으면 절대경로로 호출 (예: https://blue-nine-api.onrender.com)
-const API_BASE = (import.meta.env.VITE_API_BASE || '').replace(/\/$/, '');
+// API base 결정 규칙 (우선순위 순):
+//   1) VITE_API_BASE_URL  ← Vercel 환경변수에서 권장하는 표준 이름
+//   2) VITE_API_BASE      ← 구버전 호환 (이전 배포에서 쓰던 이름)
+//   3) 빈 문자열          ← 로컬 Vite dev proxy 또는 동일 도메인 배포에서 사용
+//
+// 절대경로 결합 결과 예) https://blue-nine-api.onrender.com/api/estimate/parse
+const API_BASE = (
+  import.meta.env.VITE_API_BASE_URL ||
+  import.meta.env.VITE_API_BASE ||
+  ''
+).replace(/\/$/, '');
 
 function url(path) {
   if (path.startsWith('http')) return path;
-  return API_BASE + path;
+  return `${API_BASE}${path}`;
+}
+
+// 디버그용 — DevTools 콘솔에서 `window.__BLUE_NINE_API_BASE__` 로 확인 가능.
+if (typeof window !== 'undefined') {
+  window.__BLUE_NINE_API_BASE__ = API_BASE || '(same-origin)';
 }
 
 let sessionId = null;

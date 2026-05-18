@@ -89,7 +89,7 @@ git push origin main
 | Install Command | (자동: `npm install`) |
 
 3. **Environment Variables** 에 추가:
-   - `VITE_API_BASE` = `https://blue-nine-api.onrender.com`   ← Render에서 발급된 URL
+   - `VITE_API_BASE_URL` = `https://blue-nine-api.onrender.com`   ← Render에서 발급된 URL
 4. **Deploy** 클릭 → 1분 내 `https://blue-nine.vercel.app` (또는 자동 생성된 도메인) 발급
 5. **Verify**:
    - 브라우저로 접속 → 광고주/캠페인 입력, 카테고리 선택, 견적서 업로드
