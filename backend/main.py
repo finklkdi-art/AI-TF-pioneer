@@ -31,6 +31,7 @@ from .monitoring import BillingMiddleware, BUS
 from .master_loader import MASTER
 from .parsers import get_parser
 from .parsers.billing_status import parse_billing
+from .services.pdf_pipeline import pdf_to_estimate_rows
 from .validation import evaluate_document, evaluate_triangle
 from .exporter import build_xlsx
 
@@ -175,6 +176,7 @@ async def estimate_parse(
     all_rows: List[EstimateRow] = []
     sources: List[SourceFileSummary] = []
     billing_rows_aggregated: List[dict] = []
+    doc_notes_buf: List[str] = []        # PDF 파이프라인 등에서 채워지는 메타 note
 
     for uf in files:
         fname = uf.filename or "uploaded.bin"
@@ -200,7 +202,39 @@ async def estimate_parse(
                 ))
             continue
 
-        # 일반 견적서 파싱
+        # ── 파일 형식별 분기 ────────────────────────────────
+        ext = (fname.rsplit(".", 1)[-1] or "").lower()
+
+        if ext == "pdf":
+            # PDF → LlamaParse + Anthropic 파이프라인 (Source 4 Precise 모드)
+            try:
+                pdf_rows, meta = pdf_to_estimate_rows(
+                    blob,
+                    category_l1=category_l1,
+                    category_l2=category_l2,
+                    mode=mode,
+                    filename=fname,
+                )
+                for r in pdf_rows:
+                    r.source_file = fname
+                all_rows.extend(pdf_rows)
+                sources.append(SourceFileSummary(
+                    filename=fname, rows=len(pdf_rows), role="estimate-pdf",
+                    size_bytes=len(blob),
+                ))
+                doc_notes_buf.append(
+                    f"📄 LLM(PDF) '{fname}' — markdown {meta['markdown_length']:,} chars · "
+                    f"신뢰도 {meta['llm_confidence']*100:.0f}%"
+                )
+                doc_notes_buf.extend(meta.get("llm_notes", []))
+            except Exception as e:
+                sources.append(SourceFileSummary(
+                    filename=fname, role="estimate-pdf", size_bytes=len(blob),
+                    error=f"pdf_pipeline_failed: {e}",
+                ))
+            continue
+
+        # 그 외 (xlsx/xls/csv) — 휴리스틱 파서
         try:
             rows = parser.parse(blob)
             for r in rows:
@@ -249,6 +283,7 @@ async def estimate_parse(
     doc.notes.append(
         f"📥 입력 {len(files)}개 파일 처리 — 성공 {len(ok_files)}건, 실패 {len(err_files)}건"
     )
+    doc.notes.extend(doc_notes_buf)
     for s in err_files:
         doc.warnings.append(f"⚠ '{s.filename}' 파싱 실패: {s.error}")
 
