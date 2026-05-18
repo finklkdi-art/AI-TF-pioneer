@@ -47,6 +47,10 @@ desktop.ini
 # BLUE NINE internal scratch
 __buf__/
 
+# Out-of-scope artefacts (사용자 결정으로 영구 제외)
+reference/Billing Status.xls
+reference/Billing Status.xlsx
+
 # Claude tooling
 .claude/settings.local.json
 
