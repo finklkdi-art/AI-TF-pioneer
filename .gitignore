@@ -1,2 +1,67 @@
-# Microsoft Office temp files
+# ─────────────────────────────────────────────────────────────
+# BLUE NINE — Repository-wide .gitignore
+# ─────────────────────────────────────────────────────────────
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+.python-version
+
+# Node / Vite
+node_modules/
+dist/
+.vite/
+*.local
+.npm
+.eslintcache
+frontend/dist/
+
+# Local env files (never commit secrets)
+.env
+.env.local
+.env.*.local
+backend/.env
+frontend/.env
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+desktop.ini
+**/desktop.ini
+
+# Office temporary files
 ~$*
+
+# BLUE NINE internal scratch
+__buf__/
+
+# Claude tooling
+.claude/settings.local.json
+
+# Non-essential project-management artefacts (heavy, personal, not needed for deploy)
+*.pptx
+*.png
+260421_*.xlsx
+AI_TF_Pioneer_*.xlsx
+마일스톤_*.xlsx
+다양한 견적서의 형태/
+보안서약서*.docx
+
+# Old prototype code (Streamlit demo, ad parser experiments) — kept locally, ignored from repo
+app.py
+ad_aggregator.py
+ad_settlement_parser.py
+create_sample_estimate.py
+generate_*.py

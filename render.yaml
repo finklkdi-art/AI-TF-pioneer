@@ -1,0 +1,31 @@
+# BLUE NINE — Render Blueprint (one-click backend deploy).
+# https://render.com/docs/blueprint-spec
+#
+# 사용법:
+#   1) GitHub repo 를 Render Dashboard 에 연결
+#   2) "Apply Blueprint" → 이 파일이 자동 감지됨
+#   3) 무료 플랜으로 자동 프로비저닝
+#
+# 주의: free 플랜은 15분 idle 후 sleep 됨 (cold start ~30s).
+#       데모 직전 한 번 깨워두면 매끄럽게 데모 가능.
+
+services:
+  - type: web
+    name: blue-nine-api
+    runtime: python
+    plan: free
+    region: singapore                 # 한국에서 가장 가까운 free 리전
+    pythonVersion: "3.11"
+    rootDir: .                        # 레포 루트 (backend/ 와 reference/ 모두 포함)
+    buildCommand: pip install --upgrade pip && pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /
+    autoDeploy: true                  # main 브랜치 push 시 자동 재배포
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.11.9"
+      - key: BLUE_NINE_ENV
+        value: production
+      # 프론트엔드 도메인이 확정되면 아래 값을 그대로 추가:
+      # - key: BLUE_NINE_ALLOWED_ORIGINS
+      #   value: https://blue-nine.vercel.app,https://your-custom-domain.com

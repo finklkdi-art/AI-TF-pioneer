@@ -1,0 +1,16 @@
+# BLUE NINE — Backend only deps (Render 배포용, slim).
+# 루트 requirements.txt 는 로컬 개발용 (Streamlit 등 포함).
+
+fastapi==0.115.0
+uvicorn[standard]==0.30.6
+python-multipart==0.0.12
+pydantic==2.9.2
+python-dotenv==1.0.1            # 로컬 .env 자동 로드 (운영선 noop)
+
+# 데이터 처리
+pandas==2.2.3
+numpy==2.1.2
+openpyxl==3.1.5
+xlrd==2.0.1                 # 구형 .xls (Billing Status.xls) 지원
+pdfplumber==0.11.4
+pypdf==5.0.1
