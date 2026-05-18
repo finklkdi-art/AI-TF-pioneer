@@ -71,6 +71,21 @@ export default function EstimateSheet({ doc, onUpdated }) {
         <div><span className="k">신호등</span> <Light color={doc.overall_light} /> {Math.round(doc.overall_confidence*100)}%</div>
       </div>
 
+      {doc.sources?.length > 0 && (
+        <div className="source-summary">
+          <strong>📥 입력 파일 ({doc.sources.length}개)</strong>
+          <ul>
+            {doc.sources.map((s, i) => (
+              <li key={i} className={s.error ? 'err' : ''}>
+                <span className={`role-tag ${s.role}`}>{s.role === 'billing' ? 'Billing' : 'Estimate'}</span>
+                <span className="src-name">{s.filename}</span>
+                <span className="src-stat">{s.error ? `❌ ${s.error}` : `${s.rows}개 행 · ${(s.size_bytes/1024).toFixed(1)} KB`}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       {doc.warnings?.length > 0 && (
         <ul className="warning-list">
           {doc.warnings.map((w, i) => <li key={i}>{w}</li>)}
@@ -87,7 +102,7 @@ export default function EstimateSheet({ doc, onUpdated }) {
             <th style={{width:60}}>수량</th>
             <th style={{width:130}}>금액</th>
             <th style={{width:36}}>신호</th>
-            <th style={{width:140}}>비고</th>
+            <th style={{width:130}}>원천 파일</th>
           </tr>
         </thead>
         <tbody>
@@ -104,7 +119,9 @@ export default function EstimateSheet({ doc, onUpdated }) {
                     <td className="num"><EditableNum row={r} field="quantity"  onSave={(f,v)=>persist(r.id,f,v)} /></td>
                     <td className="num"><EditableNum row={r} field="amount"    onSave={(f,v)=>persist(r.id,f,v)} /></td>
                     <td style={{textAlign:'center'}}><Light color={r.light} /></td>
-                    <td style={{fontSize:11,color:'#6b7891'}}>{r.note || ''}</td>
+                    <td style={{fontSize:11,color:'#6b7891'}} title={r.source_file || ''}>
+                      {r.source_file ? r.source_file.length > 16 ? r.source_file.slice(0,14)+'…' : r.source_file : (r.note || '')}
+                    </td>
                   </tr>
                   {openRowId === r.id && (
                     <tr>

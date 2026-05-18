@@ -67,7 +67,7 @@ export async function fetchMasterInfo() {
   return call('/api/master/info');
 }
 
-export async function parseEstimate({ l1, l2, file, billing, client, campaign, versionLabel }) {
+export async function parseEstimate({ l1, l2, files, client, campaign, versionLabel }) {
   const sid = await ensureSession();
   const fd = new FormData();
   fd.append('session_id', sid);
@@ -77,8 +77,10 @@ export async function parseEstimate({ l1, l2, file, billing, client, campaign, v
   if (client) fd.append('client', client);
   if (campaign) fd.append('campaign', campaign);
   if (versionLabel) fd.append('version_label', versionLabel);
-  fd.append('file', file);
-  if (billing) fd.append('billing', billing);
+  // 다중 파일 — 같은 키('files')로 반복 append → FastAPI 의 List[UploadFile] 로 수신.
+  for (const f of (files || [])) {
+    fd.append('files', f, f.name);
+  }
   return call('/api/estimate/parse', { method: 'POST', body: fd });
 }
 

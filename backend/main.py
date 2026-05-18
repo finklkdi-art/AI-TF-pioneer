@@ -24,7 +24,7 @@ from pydantic import BaseModel
 from .config import settings           # noqa: F401  (side effect: .env loaded)
 from .schemas import (
     EstimateDocument, EstimateRow, ParseRequest, UpdateRowRequest,
-    MasterRefItem,
+    MasterRefItem, SourceFileSummary,
 )
 from .session_store import STORE
 from .monitoring import BillingMiddleware, BUS
@@ -140,6 +140,14 @@ def master_reload(admin_key: str = Header(default="")):
 # ─────────────────────────────────────────────────────────────
 # 견적서 — 업로드 / 파싱 / 평가 / 수정 / Export
 # ─────────────────────────────────────────────────────────────
+def _is_billing_filename(name: str) -> bool:
+    """파일명만으로 Billing Status 여부 판별 (Source 20)."""
+    if not name:
+        return False
+    n = name.lower()
+    return any(k in n for k in ("billing", "빌링", "집행내역", "매체집행"))
+
+
 @app.post("/api/estimate/parse")
 async def estimate_parse(
     session_id: str = Form(...),
@@ -149,18 +157,63 @@ async def estimate_parse(
     client: Optional[str] = Form(None),
     campaign: Optional[str] = Form(None),
     version_label: str = Form("초안"),
-    file: UploadFile = File(...),
-    billing: Optional[UploadFile] = File(None),
+    files: List[UploadFile] = File(...),   # ✨ 다중 파일 입력
 ):
+    """
+    여러 개의 협력사 견적서 파일을 한 번에 수신.
+    - 파일별로 휴리스틱 파서 실행 → rows 통합 (source_file 태깅).
+    - 파일명이 'billing*' / '빌링*' 패턴이면 Billing Status 로 인식해 삼각 검증.
+    - 결과는 단일 EstimateDocument 로 머지 후 신호등 평가.
+    """
     if category_l1 not in ("production", "media"):
         raise HTTPException(400, "category_l1 must be production|media")
-
-    blob = await file.read()
-    # 휘발성 보관 (Source 9)
-    STORE.put_upload(session_id, file.filename or "uploaded.xlsx", blob)
+    if not files:
+        raise HTTPException(400, "최소 1개 이상의 파일이 필요합니다.")
 
     parser = get_parser(category_l1, category_l2)
-    rows = parser.parse(blob)
+
+    all_rows: List[EstimateRow] = []
+    sources: List[SourceFileSummary] = []
+    billing_rows_aggregated: List[dict] = []
+
+    for uf in files:
+        fname = uf.filename or "uploaded.bin"
+        try:
+            blob = await uf.read()
+        except Exception as e:
+            sources.append(SourceFileSummary(filename=fname, error=f"read_failed: {e}"))
+            continue
+        STORE.put_upload(session_id, fname, blob)        # 휘발성 보관 (Source 9)
+
+        # Billing Status 자동 식별 — 매체비 카테고리에서만 의미 있음
+        if category_l1 == "media" and _is_billing_filename(fname):
+            try:
+                br = parse_billing(blob)
+                billing_rows_aggregated.extend(br)
+                sources.append(SourceFileSummary(
+                    filename=fname, rows=len(br), role="billing", size_bytes=len(blob),
+                ))
+            except Exception as e:
+                sources.append(SourceFileSummary(
+                    filename=fname, role="billing", size_bytes=len(blob),
+                    error=f"billing_parse_failed: {e}",
+                ))
+            continue
+
+        # 일반 견적서 파싱
+        try:
+            rows = parser.parse(blob)
+            for r in rows:
+                r.source_file = fname
+            all_rows.extend(rows)
+            sources.append(SourceFileSummary(
+                filename=fname, rows=len(rows), role="estimate", size_bytes=len(blob),
+            ))
+        except Exception as e:
+            sources.append(SourceFileSummary(
+                filename=fname, role="estimate", size_bytes=len(blob),
+                error=f"parse_failed: {e}",
+            ))
 
     doc = EstimateDocument(
         estimate_id=f"est-{uuid.uuid4().hex[:8]}",
@@ -172,28 +225,32 @@ async def estimate_parse(
         client=client,
         campaign=campaign,
         issue_date=datetime.now().strftime("%Y-%m-%d"),
-        rows=rows,
+        rows=all_rows,
+        sources=sources,
     )
 
-    # 매체비 분기일 때 — Billing Status 와 1:1 매핑 → 삼각 검증 (Source 19~22)
-    if category_l1 == "media" and billing is not None:
-        bblob = await billing.read()
-        STORE.put_upload(session_id, billing.filename or "billing.xls", bblob)
-        billing_rows = parse_billing(bblob)
-        billing_sum = sum(r["charged"] for r in billing_rows)
-        media_paid_sum = sum(r["paid"] for r in billing_rows)
-        # 매체청구액 = doc 내 매체청구액 합
+    # 매체비 삼각 검증 (Source 19~22) — billing role 파일이 있을 때만
+    if category_l1 == "media" and billing_rows_aggregated:
+        billing_sum = sum(r["charged"] for r in billing_rows_aggregated)
+        media_paid_sum = sum(r["paid"] for r in billing_rows_aggregated)
         charged_sum = sum(r.amount for r in doc.rows if r.section == "매체청구액")
         if charged_sum == 0:
-            # 섹션 미분류 시 모든 행으로 가정 (Source 27 fallback)
             charged_sum = sum(r.amount for r in doc.rows)
-        # 수수료 — billing_status 의 (charged - paid) 합으로 추정
         fee_sum = max(billing_sum - media_paid_sum, 0)
         doc.triangle = evaluate_triangle(charged_sum, billing_sum, media_paid_sum, fee_sum)
         if not doc.triangle.consistent:
             doc.warnings.append(
                 f"⚠ 매체비 삼각 검증 실패 — Δ={doc.triangle.delta:,.0f}"
             )
+
+    # 파일별 결과를 notes 에 요약
+    ok_files = [s for s in sources if not s.error]
+    err_files = [s for s in sources if s.error]
+    doc.notes.append(
+        f"📥 입력 {len(files)}개 파일 처리 — 성공 {len(ok_files)}건, 실패 {len(err_files)}건"
+    )
+    for s in err_files:
+        doc.warnings.append(f"⚠ '{s.filename}' 파싱 실패: {s.error}")
 
     evaluate_document(doc)
     STORE.put_estimate(session_id, doc)

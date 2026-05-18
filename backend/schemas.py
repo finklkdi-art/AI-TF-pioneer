@@ -28,6 +28,7 @@ class EstimateRow(BaseModel):
     light: LightColor = "green"
     reasoning: Optional[str] = None
     editable_fields: List[str] = Field(default_factory=lambda: ["unit_price", "quantity", "amount"])
+    source_file: Optional[str] = Field(None, description="다중 업로드 시 원천 파일명")
 
 
 class TriangleCheck(BaseModel):
@@ -37,6 +38,15 @@ class TriangleCheck(BaseModel):
     media_paid_plus_fee: float = 0.0        # 매체사 지급액 + 대행수수료
     consistent: bool = True
     delta: float = 0.0
+
+
+class SourceFileSummary(BaseModel):
+    """다중 업로드 시 파일별 처리 요약."""
+    filename: str
+    rows: int = 0
+    role: str = "estimate"           # estimate | billing | unknown
+    size_bytes: int = 0
+    error: Optional[str] = None
 
 
 class EstimateDocument(BaseModel):
@@ -52,6 +62,7 @@ class EstimateDocument(BaseModel):
     job_no: Optional[str] = None
     issue_date: str = ""
     rows: List[EstimateRow] = []
+    sources: List[SourceFileSummary] = []   # 다중 파일 입력 추적
     sum_jeongga: float = 0.0          # (A) 정가합계
     sum_outsourcing: float = 0.0      # (B) 외주비합계
     sum_agency_fee: float = 0.0       # (C) 대행수수료

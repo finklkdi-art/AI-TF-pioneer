@@ -1,93 +1,120 @@
-// BLUE NINE — App shell. (Source 37: 이름 일관 노출)
+// BLUE NINE — Step-by-step orchestrator.
+//
+// Flow:
+//   Step 1 (대형 2버튼) → 클릭 시 자동 Step 2
+//   Step 2 (세부 카테고리) → 클릭 시 자동 Step 3
+//   Step 3 (멀티파일 업로드 + 분석 시작) → 완료 시 Step 4
+//   Step 4 (결과: 신호등 테이블 + Export)
+//
+// 각 step 에 '이전 단계로' 버튼 (Step 1 제외).
+
 import React, { useEffect, useState } from 'react';
 import ModeToggle from './components/ModeToggle.jsx';
-import CategoryStepper from './components/CategoryStepper.jsx';
-import UploadForm from './components/UploadForm.jsx';
+import StepIndicator from './components/StepIndicator.jsx';
+import Step1Category from './components/Step1Category.jsx';
+import Step2SubCategory from './components/Step2SubCategory.jsx';
+import Step3Upload from './components/Step3Upload.jsx';
 import EstimateSheet from './components/EstimateSheet.jsx';
 import ExportBar from './components/ExportBar.jsx';
 import MonitorPanel from './components/MonitorPanel.jsx';
-import { ensureSession, getSessionId, fetchCategories, fetchMasterInfo, destroySession } from './api.js';
+import {
+  ensureSession, getSessionId, fetchMasterInfo, destroySession,
+} from './api.js';
 
 export default function App() {
+  const [currentStep, setCurrentStep] = useState(1);
   const [mode, setMode] = useState('precise');
-  const [cats, setCats] = useState(null);
   const [pick, setPick] = useState({ l1: null, l2: null });
   const [doc, setDoc] = useState(null);
   const [sessionId, setSid] = useState(null);
   const [master, setMaster] = useState(null);
+  const [showMonitor, setShowMonitor] = useState(false);
 
   useEffect(() => {
     (async () => {
       await ensureSession();
       setSid(getSessionId());
-      setCats(await fetchCategories());
-      setMaster(await fetchMasterInfo());
+      try { setMaster(await fetchMasterInfo()); } catch {}
     })();
-    // Source 10 — 브라우저 종료 시 세션 파기
     const off = () => destroySession();
     window.addEventListener('beforeunload', off);
     return () => window.removeEventListener('beforeunload', off);
   }, []);
 
+  function reset() {
+    setPick({ l1: null, l2: null });
+    setDoc(null);
+    setCurrentStep(1);
+  }
+
+  function pickL1(l1) { setPick({ l1, l2: null }); setCurrentStep(2); }
+  function pickL2(l2) { setPick((p) => ({ ...p, l2 })); setCurrentStep(3); }
+  function back() { setCurrentStep((s) => Math.max(1, s - 1)); }
+  function onAnalyzed(doc) { setDoc(doc); setCurrentStep(4); }
+  function jumpTo(n) {
+    // 진행 표시기 클릭 시 이전 단계로만 이동 허용
+    if (n < currentStep) setCurrentStep(n);
+  }
+
   return (
-    <div className="app-shell">
+    <div className="app-shell v2">
       <div className="topbar">
         <div className="logo">BLUE <span className="nine">NINE</span></div>
         <div className="tagline">사내 AE 전용 광고 견적서 효율화 솔루션</div>
         <div className="spacer" />
         <ModeToggle mode={mode} onChange={setMode} />
+        <button
+          className="monitor-toggle"
+          onClick={() => setShowMonitor((v) => !v)}
+          title="운영 모니터링 패널 토글"
+        >📊</button>
         <div className="session-pill" title="휘발성 세션 ID — 브라우저 종료 시 자동 파기">
           SID: {sessionId ? sessionId.slice(0, 8) + '...' : '—'}
         </div>
       </div>
 
       <div className="banner">
-        🔒 입력하신 청구 정보는 <b>서버/DB에 저장되지 않으며</b> 브라우저 종료 또는 30분 idle 시 자동 파기됩니다.
-        Export 후 종료를 권장합니다. <b>마스터 데이터(제작단가기준집)</b> 항목 수: {master?.item_count ?? 0}
+        🔒 입력 데이터는 <b>서버/DB에 저장되지 않으며</b> 브라우저 종료 또는 30분 idle 시 자동 파기됩니다.
+        Export 후 종료를 권장합니다. {master ? `· 마스터: v${master.version} (${master.item_count}건)` : ''}
       </div>
 
-      <main className="workspace">
-        <aside className="panel">
-          <h3>① 카테고리 분기</h3>
-          <CategoryStepper cats={cats} l1={pick.l1} l2={pick.l2} onPick={setPick} />
-          <hr style={{border:0,borderTop:'1px solid #e5eaf2',margin:'12px 0'}} />
-          <h3>② 협력사 견적서 업로드</h3>
-          <UploadForm l1={pick.l1} l2={pick.l2} onParsed={setDoc} />
-        </aside>
+      <StepIndicator current={currentStep} onJump={jumpTo} />
 
-        <section>
-          {!doc && (
-            <div className="panel" style={{textAlign:'center',padding:'60px 20px'}}>
-              <h2 style={{color:'#0b2a4a',margin:0}}>BLUE NINE에 오신 것을 환영합니다</h2>
-              <p style={{color:'#6b7891'}}>
-                좌측에서 <b>제작비 / 매체비</b> → 세부 카테고리를 선택한 뒤,<br />
-                협력사 견적서를 업로드하면 자동으로 검증된 견적서가 생성됩니다.
-              </p>
-              <div style={{display:'inline-flex',gap:14,marginTop:12,fontSize:12,color:'#6b7891'}}>
-                <span><span className="light green" /> 정상 ≥ 99%</span>
-                <span><span className="light yellow" /> 주의 ≥ 90%</span>
-                <span><span className="light red" /> 위험 &lt; 90%</span>
-              </div>
+      <main className="step-main">
+        {currentStep === 1 && <Step1Category onPick={pickL1} />}
+        {currentStep === 2 && (
+          <Step2SubCategory l1={pick.l1} onPick={pickL2} onBack={back} />
+        )}
+        {currentStep === 3 && (
+          <Step3Upload
+            l1={pick.l1}
+            l2={pick.l2}
+            mode={mode}
+            onBack={back}
+            onAnalyzed={onAnalyzed}
+          />
+        )}
+        {currentStep === 4 && doc && (
+          <div className="step-screen result">
+            <div className="result-actions">
+              <button className="step-back" onClick={back}>← 이전 단계로</button>
+              <button className="step-restart" onClick={reset}>↺ 새 견적서 시작</button>
             </div>
-          )}
-          {doc && <EstimateSheet doc={doc} onUpdated={setDoc} />}
-          {doc && <ExportBar doc={doc} />}
-        </section>
-
-        <aside className="panel">
-          <h3>③ 운영 모니터링</h3>
-          <MonitorPanel />
-          <hr style={{border:0,borderTop:'1px solid #e5eaf2',margin:'12px 0'}} />
-          <h3>마스터 데이터</h3>
-          <div className="monitor">
-            <div className="kv"><span className="k">버전</span><span className="v">v{master?.version ?? 0}</span></div>
-            <div className="kv"><span className="k">항목 수</span><span className="v">{master?.item_count ?? 0}</span></div>
-            <div style={{fontSize:11,color:'#6b7891',marginTop:6}}>
-              일반 사용자: 읽기 전용. 변경은 Admin 콘솔.
-            </div>
+            <EstimateSheet doc={doc} onUpdated={setDoc} />
+            <ExportBar doc={doc} />
           </div>
-        </aside>
+        )}
       </main>
+
+      {showMonitor && (
+        <aside className="monitor-drawer">
+          <div className="md-head">
+            <strong>운영 모니터링</strong>
+            <button onClick={() => setShowMonitor(false)} aria-label="닫기">×</button>
+          </div>
+          <MonitorPanel />
+        </aside>
+      )}
 
       <footer className="foot">
         <span>BLUE NINE v1.0 Prototype · Rule Book v1.0</span>
