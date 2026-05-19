@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from ..config import settings
 from ..schemas import EstimateRow
 from .bible_cache import get_bible_text, get_output_layout
+from .intent_classifier import classify_purpose, format_purpose_context_for_llm
 
 
 # ─────────────────────────────────────────────────────────────
@@ -155,8 +156,17 @@ class LLMExtractedRows(BaseModel):
 
 _SYSTEM_PROMPT_CORE = """\
 당신은 한국 광고대행사가 받은 협력사 견적서 (PDF/Excel 표 markdown 직렬화) 를 분석해
-라인아이템을 구조화 추출하는 시맨틱 파서입니다. 셀 좌표가 아닌 **비즈니스 의도** 로
-파싱합니다.
+라인아이템을 구조화 추출하는 시맨틱 파서입니다. **3단계 의도 중심 파이프라인**:
+
+  STEP 1 — 청구 목적 탑다운 판별 (user message 의 [STEP 1] 블록 참조)
+  STEP 2 — 표준 엔티티 (Ground Truth) 와 의미 매칭 (user message 의 [STEP 2] 블록 참조)
+  STEP 3 — Output 양식 동기화 (sanitize: 단가/수량/금액 자동 보정)
+
+[STEP 3 출력 sanitization 규칙]
+  · 소스에 "성우료 1,500,000원" 처럼 합계만 있고 단가/수량이 비어있으면:
+      unit_price=1500000, quantity=1, amount=1500000 으로 자동 채울 것 (에러 X).
+  · 합계 행 (소계/총계/VAT/대행수수료/Total/(A)(B)(C)) 은 절대 추출 금지.
+  · 의미 매칭이 명확하지 않은 행은 추출 금지 (rows=[] 반환 + notes 설명).
 
 [1단계 — 의도 분류 (Intent Taxonomy)]
 입력 문서의 각 행/블록에 대해 먼저 아래 분류 중 하나를 머릿속에서 결정:
@@ -270,13 +280,20 @@ def anthropic_markdown_to_rows(
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
+    # STEP 1+2 — 청구 목적 분류 + 템플릿 엔티티 컨텍스트
+    purpose_rep = classify_purpose(markdown)
+    purpose_block = format_purpose_context_for_llm(purpose_rep)
+
     user_msg = (
         f"카테고리: {category_l1} / {category_l2}\n"
         f"처리 모드: {mode}\n\n"
-        f"[PDF 추출 markdown — 시작]\n"
+        f"{purpose_block}\n\n"
+        f"[소스 문서 markdown — 시작]\n"
         f"{markdown}\n"
-        f"[PDF 추출 markdown — 끝]\n\n"
-        f"위 내용에서 라인아이템을 BLUE NINE 섹션 분류 규칙에 맞춰 JSON 으로 추출하세요."
+        f"[소스 문서 markdown — 끝]\n\n"
+        f"위 [STEP 1] 결과의 청구 목적과 [STEP 2] 표준 엔티티를 우선시하여, "
+        f"의미가 매칭되는 라인아이템만 인용해 JSON 으로 추출하세요. "
+        f"인접 셀의 텍스트를 임의로 끌어오지 말고, 의미 매칭이 명확한 것만 포함."
     )
 
     # messages.parse + Pydantic 으로 스키마 강제 + 자동 검증

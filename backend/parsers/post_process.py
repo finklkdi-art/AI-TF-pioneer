@@ -160,12 +160,20 @@ def post_process_rows(rows: List[EstimateRow]) -> Tuple[List[EstimateRow], dict]
 
     merged = list(bucket.values())
 
-    # 5) 금액 0 행 (살아있지 않은 행) 제외 — 외주비에만 적용
+    # 5) Output 양식 동기화 sanitize + 0 행 제거
+    # "성우료 1,500,000" 처럼 unit/qty 없이 amount 만 있는 경우 자동 보정.
+    stats["sanitized"] = 0
     final: List[EstimateRow] = []
     for r in merged:
         if not r.amount or r.amount == 0:
             stats["dropped_zero"] += 1
             continue
+        if not r.quantity or r.quantity == 0:
+            r.quantity = 1.0
+            stats["sanitized"] += 1
+        if not r.unit_price or r.unit_price == 0:
+            r.unit_price = r.amount / (r.quantity or 1.0)
+            stats["sanitized"] += 1
         final.append(r)
 
     # 다른 섹션(정가/대행수수료) + 정리된 외주비
