@@ -499,6 +499,67 @@ footer.foot {
 .medium-label { font-size: 18px; font-weight: 700; color: var(--navy); }
 .medium-template { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
+/* Step 3 — 정가항목 적용 건수 카운터 */
+.applied-count-box {
+  max-width: 880px;
+  margin: 14px auto 0;
+  background: #eff5ff;
+  border: 1px solid #c6d8ee;
+  border-radius: 12px;
+  padding: 14px 18px;
+}
+.applied-count-box .ac-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 18px;
+}
+.applied-count-box strong {
+  color: var(--navy);
+  font-size: 14px;
+}
+.applied-count-box .ac-sub {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 1.45;
+  max-width: 540px;
+}
+.applied-count-box .ac-counter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.applied-count-box .ac-counter button {
+  width: 32px; height: 32px;
+  border-radius: 999px;
+  border: 1px solid var(--navy);
+  background: white;
+  color: var(--navy);
+  font-size: 18px;
+  font-weight: 700;
+  cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.applied-count-box .ac-counter button:hover:not(:disabled) {
+  background: var(--navy); color: white;
+}
+.applied-count-box .ac-counter button:disabled {
+  opacity: 0.4; cursor: not-allowed;
+}
+.applied-count-box .ac-counter input {
+  width: 64px;
+  text-align: center;
+  font-size: 18px;
+  font-weight: 700;
+  padding: 6px 4px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  color: var(--navy);
+  font-variant-numeric: tabular-nums;
+}
+
 /* Step 3: meta + dropzone + cta */
 .meta-row {
   display: grid;

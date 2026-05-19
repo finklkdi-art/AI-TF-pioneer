@@ -15,10 +15,13 @@ export default function Step3Upload({ l1, l2, mode, onBack, onAnalyzed }) {
   const [client, setClient] = useState('');
   const [campaign, setCampaign] = useState('');
   const [versionLabel, setVersionLabel] = useState('초안');
+  const [appliedCount, setAppliedCount] = useState(1);   // 정가항목 적용 건수
   const [dragOver, setDragOver] = useState(false);
   const [analyzing, setAnalyzing] = useState(false);
   const [err, setErr] = useState('');
   const inputRef = useRef(null);
+
+  const bumpApplied = (delta) => setAppliedCount((n) => Math.max(0, n + delta));
 
   function addFiles(incoming) {
     const arr = Array.from(incoming || []);
@@ -55,6 +58,7 @@ export default function Step3Upload({ l1, l2, mode, onBack, onAnalyzed }) {
         client: client.trim() || null,
         campaign: campaign.trim() || null,
         versionLabel,
+        appliedCount,
       });
       onAnalyzed(doc);
     } catch (e) {
@@ -97,6 +101,33 @@ export default function Step3Upload({ l1, l2, mode, onBack, onAnalyzed }) {
           </select>
         </label>
       </div>
+
+      {l1 === 'production' && (
+        <div className="applied-count-box">
+          <div className="ac-head">
+            <div>
+              <strong>정가항목 적용 건수</strong>
+              <p className="ac-sub">
+                기획료·카피료·크리에이티브 워크료·디렉션료·자료조사비·제작진행비 6개 항목을
+                표준 단가 × 적용 건수로 자동 산입합니다. (input 파일과는 별개)
+              </p>
+            </div>
+            <div className="ac-counter">
+              <button type="button" onClick={() => bumpApplied(-1)} disabled={analyzing || appliedCount <= 0} aria-label="-">−</button>
+              <input
+                type="number" min="0" step="1"
+                value={appliedCount}
+                onChange={(e) => {
+                  const v = parseInt(e.target.value, 10);
+                  setAppliedCount(isNaN(v) ? 0 : Math.max(0, v));
+                }}
+                disabled={analyzing}
+              />
+              <button type="button" onClick={() => bumpApplied(1)} disabled={analyzing} aria-label="+">+</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <div
         className={`dropzone ${dragOver ? 'over' : ''} ${analyzing ? 'disabled' : ''}`}

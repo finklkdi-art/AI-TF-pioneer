@@ -93,38 +93,26 @@ class LLMExtractedRows(BaseModel):
 
 
 _SYSTEM_PROMPT = """\
-당신은 한국 광고대행사의 견적서/단가표 PDF 를 분석해 라인아이템을 구조화 추출하는 분석가입니다.
+당신은 한국 광고대행사가 받은 협력사 견적서 PDF 를 분석해 라인아이템을 구조화 추출하는 분석가입니다.
 
-[BLUE NINE 섹션 분류 규칙]
-■ 제작비 (production) 카테고리:
-  · 정가항목   — 회사 정가 항목 (기본료, Copy료, Creative Work료, Direction료, 기획관리비 등)
-  · 외주비     — 협력사/PD 비용 (PD료, 촬영연출, POST프로덕션, 편집, 녹음, BGM, 디자인, 인쇄, 후반작업 등)
-  · 대행수수료 — 광고대행사 수수료 (= 외주비 × 17.65% 또는 10%)
+[★★ 핵심 비즈니스 룰 ★★]
+  · 협력사가 보내온 input PDF 에는 '정가항목'(기획료/카피료/크리에이티브 워크료/디렉션료/
+    자료조사비/제작진행비)이 절대 포함되지 않습니다.
+  · 따라서 어떤 행도 '정가항목' 으로 분류하지 마십시오. 모든 제작 관련 라인은
+    '외주비' 로 분류합니다.
+  · 만약 PDF 안에 '기획료', '카피료' 같은 명칭이 등장하더라도 그것은 협력사의
+    내부 비용 분류일 뿐이므로 '외주비' 로 흡수합니다.
 
-■ 매체비 (media) 카테고리:
-  · 매체청구액 — 광고주에게 청구하는 매체비
-  · 매체지급액 — 매체사에 지급하는 금액
-  · 매체수수료 — 광고대행사가 수취하는 수수료
-
-■ 분류 불가능한 경우만 '기타' 사용. 가능한 한 위 7개 안으로 매핑.
+[BLUE NINE 섹션 키]
+  - production: '외주비' (모든 협력사 제작 라인) / '대행수수료' (협력사가 명시한 경우만)
+  - media:      '매체청구액' / '매체지급액' / '매체수수료'
 
 [엄수 규칙 — Source 28 (입력 보존 원칙)]
-1. PDF 에 명시된 숫자만 사용. 추정/계산/반올림으로 새로운 숫자를 만들지 말 것.
-2. 금액(amount) 칸이 비어 있고 단가(unit_price)·수량(quantity)이 모두 있으면 amount = unit_price × quantity 만 허용.
+1. PDF 에 명시된 숫자만 사용. 추정·계산·반올림으로 새 숫자를 만들지 말 것.
+2. amount 칸이 비어 있고 unit_price·quantity 가 모두 있으면 amount = unit_price × quantity 만 허용.
 3. 헤더 행, 합계/소계/총계 행은 제외. 데이터 행만 추출.
-4. 카테고리가 모호하면 overall_confidence 를 낮추고 notes 에 사유 명시 (예: "기타 제작비로 보임").
+4. 항목명에 협력사·세부내역이 함께 있으면 가능한 한 그대로 보존 (예: "감독료 / 편집·CG연출 포함").
 5. 추출 가능한 라인이 없으면 rows=[] 빈 배열 반환 + notes 설명.
-
-[항목명 분류 힌트]
-· "기본료", "Copy료", "Creative Work료", "Direction료", "기획관리비" → 정가항목
-· "PD료", "Producer", "촬영", "촬영연출", "감독" → 외주비
-· "POST", "편집", "EDIT", "DI", "2D", "3D", "VFX", "CG" → 외주비
-· "녹음", "성우", "음향", "BGM" → 외주비
-· "디자인", "리터칭", "보정", "일러스트" → 외주비
-· "대행수수료", "Agency Fee" → 대행수수료
-· "매체비", "Gross", "광고주청구" → 매체청구액
-· "지급액", "Net", "매체사지급" → 매체지급액
-· "매체수수료", "Commission" → 매체수수료
 
 JSON 으로만 응답하며, 한글 항목명은 그대로 보존합니다.
 """
@@ -194,17 +182,29 @@ def pdf_to_estimate_rows(
     )
 
     rows: List[EstimateRow] = []
+    demoted = 0
     for r in extracted.rows:
+        section = r.section
+        item_name = r.item_name[:80]
+        # ── 정가항목 차단 (server-side guardrail) ───────────────────
+        # input 파일에는 정가항목이 없다는 비즈니스 룰. LLM 이 잘못 분류해도 외주비로 강등.
+        if category_l1 == "production" and section == "정가항목":
+            section = "외주비"
+            demoted += 1
         rows.append(EstimateRow(
             id=f"r-{uuid.uuid4().hex[:8]}",
-            section=r.section,
-            item_name=r.item_name[:80],
+            section=section,
+            item_name=item_name,
             vendor=r.vendor,
             unit_price=r.unit_price,
             quantity=r.quantity,
             amount=r.amount,
             note=r.note,
         ))
+    if demoted:
+        extracted.notes.append(
+            f"⛓ '정가항목' {demoted}건을 input 룰에 따라 '외주비' 로 강등"
+        )
 
     meta = {
         "markdown_length": len(md),

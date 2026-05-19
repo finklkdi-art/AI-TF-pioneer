@@ -73,26 +73,37 @@ def _classify_section(row_text: str, *, media: bool = False) -> Optional[str]:
 
 
 def _scan_rows(df: pd.DataFrame, *, media: bool = False) -> List[EstimateRow]:
-    """단순 휴리스틱 추출:
-    각 행에서 (이름성 텍스트, 수량, 단가, 금액)을 찾아 EstimateRow 생성.
+    """행 단위 휴리스틱 추출.
+
+    [Section 분류 규칙 — 2026-05-19 화이트리스트 강제]
+      · production 카테고리:
+          item_name 이 backend/jeongga_whitelist 의 6개 항목과 매칭되면 '정가항목',
+          그 외 모든 행은 '외주비' 로 격리.
+          → 섹션 헤더('정가합계', '외주비합계' 등) 키워드는 더 이상 분류에 영향을 주지 않음.
+      · media 카테고리:
+          기존 헤더 휴리스틱 유지 — '매체청구액 / 매체지급액 / 매체수수료'.
     """
     out: List[EstimateRow] = []
-    current_section = "외주비" if not media else "매체청구액"
+    current_section = "매체청구액" if media else None    # production 은 행별로 결정
+
     for ridx in range(df.shape[0]):
         row = df.iloc[ridx]
         cells = [c for c in row.tolist() if c is not None and not (isinstance(c, float) and pd.isna(c))]
         if not cells:
             continue
-        # 섹션 헤더 감지
-        joined = " ".join(str(c) for c in cells)
-        sect = _classify_section(joined, media=media)
-        if sect:
-            current_section = sect
+        # media 카테고리는 헤더 기반 섹션 유지
+        if media:
+            joined = " ".join(str(c) for c in cells)
+            sect = _classify_section(joined, media=True)
+            if sect:
+                current_section = sect
+
         # 숫자 후보
         nums = [(j, _to_num(v)) for j, v in enumerate(row.tolist()) if _to_num(v) is not None]
         if len(nums) < 1:
             continue
-        # name = 가장 앞쪽의 텍스트 셀들 합치기
+
+        # name = 가장 앞쪽의 텍스트 셀들 합치기 (최대 3개)
         text_cells = []
         for j, v in enumerate(row.tolist()):
             if _to_num(v) is not None:
@@ -106,24 +117,36 @@ def _scan_rows(df: pd.DataFrame, *, media: bool = False) -> List[EstimateRow]:
         if not text_cells:
             continue
         name = " / ".join(text_cells[:3])
-        # 합계로 보이는 행은 건너뜀 (별도 누적)
+
+        # 합계/소계/총계 행은 건너뜀
         if any(k in name for k in ("합계", "총계", "소계", "총합", "Total", "TOTAL")):
             continue
+
         # 마지막 숫자를 amount, 그 앞을 unit_price/quantity 후보로
-        nums_sorted = nums
-        amount = nums_sorted[-1][1] or 0.0
+        amount = nums[-1][1] or 0.0
         unit_price = 0.0
         quantity = 1.0
-        if len(nums_sorted) >= 3:
-            unit_price = nums_sorted[-3][1] or 0.0
-            quantity = nums_sorted[-2][1] or 1.0
-        elif len(nums_sorted) == 2:
-            unit_price = nums_sorted[-2][1] or 0.0
+        if len(nums) >= 3:
+            unit_price = nums[-3][1] or 0.0
+            quantity = nums[-2][1] or 1.0
+        elif len(nums) == 2:
+            unit_price = nums[-2][1] or 0.0
             quantity = 1.0
+
+        # ── 섹션 결정 ─────────────────────────────────────────────
+        # 2026-05-19 비즈니스 룰: 정가항목은 input 파일에 존재하지 않음.
+        # AE 가 별도로 applied_count 를 입력하면 backend.main 이 정가행을 주입.
+        # 따라서 파서는 production 카테고리에서 모든 추출 행을 '외주비' 로 분류.
+        if media:
+            section = current_section or "매체청구액"
+        else:
+            section = "외주비"
+        item_name_out = name[:80]
+
         out.append(EstimateRow(
             id=f"r-{uuid.uuid4().hex[:8]}",
-            section=current_section,
-            item_name=name[:80],
+            section=section,
+            item_name=item_name_out,
             unit_price=unit_price,
             quantity=quantity,
             amount=amount,

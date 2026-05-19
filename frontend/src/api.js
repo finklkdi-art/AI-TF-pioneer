@@ -79,7 +79,7 @@ export async function fetchMasterInfo() {
   return call('/api/master/info');
 }
 
-export async function parseEstimate({ l1, l2, files, client, campaign, versionLabel }) {
+export async function parseEstimate({ l1, l2, files, client, campaign, versionLabel, appliedCount }) {
   const sid = await ensureSession();
   const fd = new FormData();
   fd.append('session_id', sid);
@@ -89,6 +89,8 @@ export async function parseEstimate({ l1, l2, files, client, campaign, versionLa
   if (client) fd.append('client', client);
   if (campaign) fd.append('campaign', campaign);
   if (versionLabel) fd.append('version_label', versionLabel);
+  // applied_count: AE 가 수동 설정한 정가항목 적용 건수 (production 카테고리에서만 의미)
+  fd.append('applied_count', String(appliedCount ?? 1));
   // 다중 파일 — 같은 키('files')로 반복 append → FastAPI 의 List[UploadFile] 로 수신.
   for (const f of (files || [])) {
     fd.append('files', f, f.name);

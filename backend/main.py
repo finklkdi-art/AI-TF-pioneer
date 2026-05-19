@@ -32,6 +32,7 @@ from .master_loader import MASTER
 from .parsers import get_parser
 from .parsers.billing_status import parse_billing
 from .services.pdf_pipeline import pdf_to_estimate_rows
+from .jeongga_whitelist import generate_jeongga_rows
 from .validation import evaluate_document, evaluate_triangle
 from .exporter import build_xlsx
 
@@ -158,6 +159,7 @@ async def estimate_parse(
     client: Optional[str] = Form(None),
     campaign: Optional[str] = Form(None),
     version_label: str = Form("초안"),
+    applied_count: int = Form(1),          # ✨ 정가항목 적용 건수 — AE 가 Step 3 에서 수동 설정
     files: List[UploadFile] = File(...),   # ✨ 다중 파일 입력
 ):
     """
@@ -249,6 +251,16 @@ async def estimate_parse(
                 error=f"parse_failed: {e}",
             ))
 
+    # ── 정가항목 주입 (Source 16; 2026-05-19 비즈니스 룰) ─────────
+    # production 카테고리에서는 AE 가 입력한 applied_count 만큼 6개 정가행 자동 생성.
+    # media 카테고리에서는 정가항목 개념 자체가 없으므로 주입 안 함 (Source 17).
+    if category_l1 == "production":
+        jeongga_rows = generate_jeongga_rows(applied_count)
+        # 시트 상단에 정가항목을 먼저 노출하기 위해 all_rows 앞에 prepend
+        merged_rows = jeongga_rows + all_rows
+    else:
+        merged_rows = all_rows
+
     doc = EstimateDocument(
         estimate_id=f"est-{uuid.uuid4().hex[:8]}",
         session_id=session_id,
@@ -259,9 +271,13 @@ async def estimate_parse(
         client=client,
         campaign=campaign,
         issue_date=datetime.now().strftime("%Y-%m-%d"),
-        rows=all_rows,
+        rows=merged_rows,
         sources=sources,
     )
+    if category_l1 == "production":
+        doc.notes.append(
+            f"📐 정가항목 자동 주입: 표준 단가 × 적용 건수 {applied_count} (AE 수동 입력)"
+        )
 
     # 매체비 삼각 검증 (Source 19~22) — billing role 파일이 있을 때만
     if category_l1 == "media" and billing_rows_aggregated:
