@@ -262,7 +262,7 @@ table.estimate tr.row-red td { background: rgba(224,83,61,0.07); }
 
 .totals {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   gap: 8px;
   margin-top: 16px;
 }
@@ -272,6 +272,13 @@ table.estimate tr.row-red td { background: rgba(224,83,61,0.07); }
   padding: 8px 10px;
   background: #f7faff;
 }
+.totals .card.highlight {
+  background: var(--navy);
+  color: white;
+  border-color: var(--navy);
+}
+.totals .card.highlight .k { color: #cfe1f5; }
+.totals .card.highlight .v { color: white; }
 .totals .card .k { font-size: 11px; color: var(--muted); }
 .totals .card .v { font-size: 16px; font-weight: 700; color: var(--navy); }
 

@@ -142,7 +142,9 @@ export default function EstimateSheet({ doc, onUpdated }) {
       <div className="totals">
         <div className="card"><div className="k">(A) 정가합계</div><div className="v">{fmt(doc.sum_jeongga)}</div></div>
         <div className="card"><div className="k">(B) 외주비</div>  <div className="v">{fmt(doc.sum_outsourcing)}</div></div>
-        <div className="card"><div className="k">(C) 대행수수료</div><div className="v">{fmt(doc.sum_agency_fee)}</div></div>
+        <div className="card"><div className="k">(C) 대행수수료 (17.65%)</div><div className="v">{fmt(doc.sum_agency_fee)}</div></div>
+        <div className="card highlight"><div className="k">거래가격 (A+B+C, VAT 별도)</div><div className="v">{fmt(doc.sum_total)} ₩</div></div>
+        <div className="card"><div className="k">VAT 10%</div><div className="v">{fmt(doc.vat)}</div></div>
         <div className="card"><div className="k">청구금액 (VAT 포함)</div><div className="v">{fmt(doc.sum_with_vat)} ₩</div></div>
       </div>
 

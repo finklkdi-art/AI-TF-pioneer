@@ -23,6 +23,11 @@ export default function Step3Upload({ l1, l2, mode, onBack, onAnalyzed }) {
 
   const bumpApplied = (delta) => setAppliedCount((n) => Math.max(0, n + delta));
 
+  // 정가항목은 영상/인쇄 카테고리에서만 사용. 그 외엔 카운터 숨김 + 서버로 0 전송.
+  const JEONGGA_APPLICABLE_L2 = new Set(['video', 'print']);
+  const showJeonggaCounter = l1 === 'production' && JEONGGA_APPLICABLE_L2.has(l2);
+  const effectiveAppliedCount = showJeonggaCounter ? appliedCount : 0;
+
   function addFiles(incoming) {
     const arr = Array.from(incoming || []);
     if (!arr.length) return;
@@ -58,7 +63,7 @@ export default function Step3Upload({ l1, l2, mode, onBack, onAnalyzed }) {
         client: client.trim() || null,
         campaign: campaign.trim() || null,
         versionLabel,
-        appliedCount,
+        appliedCount: effectiveAppliedCount,
       });
       onAnalyzed(doc);
     } catch (e) {
@@ -102,14 +107,15 @@ export default function Step3Upload({ l1, l2, mode, onBack, onAnalyzed }) {
         </label>
       </div>
 
-      {l1 === 'production' && (
+      {showJeonggaCounter && (
         <div className="applied-count-box">
           <div className="ac-head">
             <div>
-              <strong>정가항목 적용 건수</strong>
+              <strong>정가항목 청구 건수 ({l2 === 'video' ? '영상' : '인쇄'} 제작비)</strong>
               <p className="ac-sub">
                 기획료·카피료·크리에이티브 워크료·디렉션료·자료조사비·제작진행비 6개 항목을
-                표준 단가 × 적용 건수로 자동 산입합니다. (input 파일과는 별개)
+                {l2 === 'video' ? ' 영상' : ' 인쇄'} 표준 단가 × 적용 건수로 자동 산입합니다.
+                (input 파일에서는 정가항목을 추출하지 않습니다)
               </p>
             </div>
             <div className="ac-counter">
@@ -126,6 +132,14 @@ export default function Step3Upload({ l1, l2, mode, onBack, onAnalyzed }) {
               <button type="button" onClick={() => bumpApplied(1)} disabled={analyzing} aria-label="+">+</button>
             </div>
           </div>
+        </div>
+      )}
+      {l1 === 'production' && !showJeonggaCounter && (
+        <div className="applied-count-box" style={{ background: '#f5f5f7', borderColor: '#dcdce0' }}>
+          <p className="ac-sub" style={{ margin: 0 }}>
+            <strong>정가항목 미적용</strong> — 선택하신 '{l2}' 카테고리에는 표준 정가 세트가
+            정의되어 있지 않습니다. 외주비와 대행수수료(17.65%) 만으로 견적이 구성됩니다.
+          </p>
         </div>
       )}
 

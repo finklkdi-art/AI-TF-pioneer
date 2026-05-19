@@ -252,14 +252,13 @@ async def estimate_parse(
             ))
 
     # ── 정가항목 주입 (Source 16; 2026-05-19 비즈니스 룰) ─────────
-    # production 카테고리에서는 AE 가 입력한 applied_count 만큼 6개 정가행 자동 생성.
-    # media 카테고리에서는 정가항목 개념 자체가 없으므로 주입 안 함 (Source 17).
-    if category_l1 == "production":
-        jeongga_rows = generate_jeongga_rows(applied_count)
-        # 시트 상단에 정가항목을 먼저 노출하기 위해 all_rows 앞에 prepend
-        merged_rows = jeongga_rows + all_rows
-    else:
-        merged_rows = all_rows
+    # 카테고리별 표준 단가 세트 매핑 (영상/인쇄만 보유).
+    # media + 그 외 production(radio/btl/other) 은 빈 리스트 → A=0.
+    jeongga_rows = (
+        generate_jeongga_rows(category_l2, applied_count)
+        if category_l1 == "production" else []
+    )
+    merged_rows = jeongga_rows + all_rows
 
     doc = EstimateDocument(
         estimate_id=f"est-{uuid.uuid4().hex[:8]}",
@@ -274,9 +273,13 @@ async def estimate_parse(
         rows=merged_rows,
         sources=sources,
     )
-    if category_l1 == "production":
+    if jeongga_rows:
         doc.notes.append(
-            f"📐 정가항목 자동 주입: 표준 단가 × 적용 건수 {applied_count} (AE 수동 입력)"
+            f"📐 정가항목 자동 주입: 카테고리 '{category_l2}' 표준 단가 × 적용 건수 {applied_count} (AE 수동 입력)"
+        )
+    elif category_l1 == "production":
+        doc.notes.append(
+            f"📐 정가항목 미적용: 카테고리 '{category_l2}' 에는 표준 단가 세트가 정의되지 않음"
         )
 
     # 매체비 삼각 검증 (Source 19~22) — billing role 파일이 있을 때만

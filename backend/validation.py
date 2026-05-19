@@ -6,8 +6,8 @@
 - 매체비 삼각 검증 (Source 19, 22)
 """
 from __future__ import annotations
+import uuid
 from typing import List, Tuple, Optional
-import math
 
 from .schemas import EstimateRow, EstimateDocument, TriangleCheck, LightColor
 from .master_loader import MASTER
@@ -15,6 +15,51 @@ from .master_loader import MASTER
 # 부동소수 비교 허용 오차 — Source 28, 29 (input 숫자 보존)
 EPS_ABS = 0.5            # 원 단위 (반올림 흡수)
 EPS_REL = 1e-4
+
+# ─────────────────────────────────────────────────────────────
+# 대행수수료 요율 — 사내 표준 (Source 17, 18)
+# ─────────────────────────────────────────────────────────────
+# 표준 요율 (전 항목 일괄 적용 기준)
+DEFAULT_AGENCY_FEE_RATE = 0.1765         # 17.65%
+
+# 향후 확장: 모델료/진행비 등 일부 항목에 별도 요율 적용 시 사용
+REDUCED_AGENCY_FEE_RATE = 0.10           # 10%
+REDUCED_RATE_KEYWORDS: Tuple[str, ...] = (
+    # 활성화 시 이 키워드를 포함한 외주 행만 REDUCED 요율 적용.
+    # 현재는 비활성 — 전 항목 17.65% 일괄 처리.
+    # "모델료", "Model", "진행비"
+)
+
+
+def agency_fee_rate_for(item_name: str) -> float:
+    """
+    개별 외주 행에 적용할 요율 결정.
+    - REDUCED_RATE_KEYWORDS 비어있으면 항상 DEFAULT_AGENCY_FEE_RATE 반환.
+    - 향후 사내 정책 변경 시 위 상수만 수정하면 즉시 자동 분기.
+    """
+    if not REDUCED_RATE_KEYWORDS:
+        return DEFAULT_AGENCY_FEE_RATE
+    name = (item_name or "").lower()
+    for kw in REDUCED_RATE_KEYWORDS:
+        if kw.lower() in name:
+            return REDUCED_AGENCY_FEE_RATE
+    return DEFAULT_AGENCY_FEE_RATE
+
+
+def calculate_agency_fee(outsourcing_rows: List[EstimateRow]) -> Tuple[float, float]:
+    """
+    외주비 행들에 대해 대행수수료 총액 계산.
+    Returns: (총수수료, 실효요율) — 실효요율은 표시용 (가중평균).
+    """
+    fee = 0.0
+    base = 0.0
+    for r in outsourcing_rows:
+        rate = agency_fee_rate_for(r.item_name)
+        fee += r.amount * rate
+        base += r.amount
+    fee = round(fee)
+    effective_rate = (fee / base) if base else DEFAULT_AGENCY_FEE_RATE
+    return fee, effective_rate
 
 
 def _close(a: float, b: float) -> bool:
@@ -84,38 +129,71 @@ def aggregate_sections(rows: List[EstimateRow]) -> Tuple[float, float, float]:
     return a, b, c
 
 
-def compute_agency_fee(sum_b: float, rate: float = 0.1765) -> float:
-    # Source: 영상제작비 패턴 (B) * 17.65% (회사 정책에 따라 10% 등 변주)
+# Legacy alias — 외부에서 import 할 수 있어 유지 (단일 항목 빠른 계산)
+def compute_agency_fee(sum_b: float, rate: float = DEFAULT_AGENCY_FEE_RATE) -> float:
     return round(sum_b * rate)
 
 
+_FEE_ROW_ID_PREFIX = "r-fee-auto-"
+
+
+def _strip_auto_fee_rows(doc: EstimateDocument) -> None:
+    """기존 자동생성 대행수수료 행을 제거 (재계산 idempotent 보장)."""
+    doc.rows = [r for r in doc.rows if not (
+        r.section == "대행수수료" and r.id.startswith(_FEE_ROW_ID_PREFIX)
+    )]
+
+
 def evaluate_document(doc: EstimateDocument) -> EstimateDocument:
+    # 0) 이전 자동 대행수수료 행 제거 (update_row 등 재호출 시 중복 방지)
+    _strip_auto_fee_rows(doc)
+
     # 1) 행 단위 평가
     for r in doc.rows:
         evaluate_row(r)
-    # 2) 합계 산출
-    a, b, c = aggregate_sections(doc.rows)
+
+    # 2) 합계 산출 — 외주비/정가/대행수수료(수동 입력분)
+    a, b, c_manual = aggregate_sections(doc.rows)
     doc.sum_jeongga = a
     doc.sum_outsourcing = b
-    # 정가 견적서에 대행수수료가 비어있고 production 이면 자동 계산 *보조* — 단, input 행은 절대 수정하지 않음
-    if c == 0 and doc.category_l1 == "production":
-        c = compute_agency_fee(b)
-        doc.notes.append("대행수수료 자동 계산: (B) × 17.65%")
-    doc.sum_agency_fee = c
-    doc.sum_total = a + b + c
+
+    # 3) 대행수수료 자동 계산 (production 한정; Source 17 — 매체비엔 대행수수료 없음)
+    #    외주비 합계 × 17.65% 를 합성 행으로 doc.rows 끝에 추가.
+    if doc.category_l1 == "production" and c_manual == 0 and b > 0:
+        outsourcing_rows = [r for r in doc.rows if r.section == "외주비"]
+        fee_amount, eff_rate = calculate_agency_fee(outsourcing_rows)
+        fee_row = EstimateRow(
+            id=f"{_FEE_ROW_ID_PREFIX}{uuid.uuid4().hex[:6]}",
+            section="대행수수료",
+            item_name=f"대행수수료 ({eff_rate*100:.2f}%)",
+            unit_price=fee_amount,
+            quantity=1.0,
+            amount=fee_amount,
+            source_file="(자동 계산)",
+            note=f"외주비 합계 {b:,.0f} × {eff_rate*100:.2f}%",
+            confidence=1.0,
+            light="green",
+            reasoning=f"자동 산출: 외주비 {b:,.0f} × {eff_rate*100:.2f}% = {fee_amount:,.0f}",
+        )
+        doc.rows.append(fee_row)
+        c_total = fee_amount
+        doc.notes.append(
+            f"⚡ 대행수수료 자동 산입: 외주비 {b:,.0f} × {DEFAULT_AGENCY_FEE_RATE*100:.2f}% = {fee_amount:,.0f}"
+        )
+    else:
+        c_total = c_manual
+
+    doc.sum_agency_fee = c_total
+    doc.sum_total = a + b + c_total      # 거래가격 (VAT 별도)
     doc.vat = round(doc.sum_total * 0.1)
     doc.sum_with_vat = doc.sum_total + doc.vat
 
-    # 3) 더블체크 — input vs output 일치 (Source 28, 29)
-    input_sum = sum(r.amount for r in doc.rows)
-    output_sum = doc.sum_jeongga + doc.sum_outsourcing + doc.sum_agency_fee
-    # 대행수수료가 자동 계산된 경우 input_sum 에서 빼고 비교
-    rows_c = sum(r.amount for r in doc.rows if r.section == "대행수수료")
-    expected_from_rows = input_sum + (doc.sum_agency_fee - rows_c)
-    if not _close(expected_from_rows, output_sum):
+    # 4) 더블체크 — 모든 행 합산 (자동 fee 포함) == A + B + C
+    all_rows_sum = sum(r.amount for r in doc.rows)
+    if not _close(all_rows_sum, doc.sum_total):
         doc.warnings.append(
-            f"⚠ 더블체크 실패: 행 합계({input_sum:,.0f}) + 대행수수료({doc.sum_agency_fee:,.0f}) "
-            f"!= 출력 합계({output_sum:,.0f})"
+            f"⚠ 더블체크 실패: 모든 행 합계 {all_rows_sum:,.0f} "
+            f"!= A({a:,.0f}) + B({b:,.0f}) + C({c_total:,.0f}) = {doc.sum_total:,.0f}"
         )
 
     # 4) overall 신호등 — 최악 케이스가 전체를 결정
