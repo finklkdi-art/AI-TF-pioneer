@@ -15,15 +15,23 @@ function Light({ color }) {
 }
 
 function EditableNum({ row, field, onSave }) {
-  const [v, setV] = useState(String(row[field] ?? ''));
+  const raw = row[field] ?? 0;
+  const [v, setV] = useState(String(raw));
+  const [focused, setFocused] = useState(false);
   const editable = row.light !== 'green';   // 노랑/빨강 인 경우 수정 가능 (요구사항 3)
+  // 포커스 외 상태에서는 콤마 포맷, 편집 시엔 원시값 노출
+  const display = focused
+    ? v
+    : (typeof raw === 'number' && !isNaN(raw) ? Math.round(raw).toLocaleString('ko-KR') : v);
   return (
     <input
       className={`cell-num ${editable ? 'editable' : ''}`}
       readOnly={!editable}
-      value={v}
+      value={display}
+      onFocus={() => { setFocused(true); setV(String(row[field] ?? '')); }}
       onChange={(e) => setV(e.target.value.replace(/[^\d.\-]/g, ''))}
       onBlur={() => {
+        setFocused(false);
         const parsed = parseFloat(v.replace(/,/g, ''));
         if (!isNaN(parsed) && parsed !== row[field]) onSave(field, parsed);
         else setV(String(row[field] ?? ''));

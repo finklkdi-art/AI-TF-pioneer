@@ -35,12 +35,16 @@ body {
   align-items: center;
   gap: 18px;
 }
-.topbar .logo {
+.topbar a.logo {
   font-weight: 800;
   font-size: 20px;
   letter-spacing: 1px;
+  color: #fff;
+  text-decoration: none;
+  cursor: pointer;
 }
-.topbar .logo .nine { color: #5dc9ff; }
+.topbar a.logo:hover { opacity: 0.85; }
+.topbar a.logo .nine { color: #5dc9ff; }
 .topbar .tagline {
   color: #b8d4ef;
   font-size: 13px;

@@ -356,16 +356,19 @@ def estimate_export(session_id: str, estimate_id: str):
     doc = STORE.get_estimate(session_id, estimate_id)
     if not doc:
         raise HTTPException(404, "estimate not found")
-    if doc.overall_light == "red":
-        # Source 32 — Export 비활성화 정책
-        raise HTTPException(409, "Red 신호등 상태에서는 Export 불가. 수정 후 재시도.")
+    # 정책 변경 (2026-05-19): Red 신호등 상태에서도 다운로드 허용.
+    # AE 가 검증 경고를 보면서도 즉시 청구 진행이 필요한 케이스가 있음.
+    # 경고는 응답 헤더 X-Blue-Nine-Validation 으로 노출.
     data = build_xlsx(doc)
     bio = io.BytesIO(data)
     fname = f"BLUE_NINE_{doc.category_l1}_{doc.category_l2}_{doc.estimate_id}.xlsx"
     return StreamingResponse(
         bio,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+        headers={
+            "Content-Disposition": f'attachment; filename="{fname}"',
+            "X-Blue-Nine-Validation": doc.overall_light,
+        },
     )
 
 

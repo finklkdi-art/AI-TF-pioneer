@@ -16,9 +16,13 @@ export default function ExportBar({ doc }) {
 
   return (
     <div className="export-bar">
-      {blocked && <span style={{color:'#e0533d',fontSize:12,alignSelf:'center',marginRight:'auto'}}>⛔ Red 상태 — 수정 후 Export 가능</span>}
-      <button className="alt" onClick={() => window.print()} disabled={blocked}>🖨 인쇄 (Chrome A4)</button>
-      <button onClick={dl} disabled={blocked}>⬇ Excel 다운로드</button>
+      {blocked && (
+        <span style={{color:'#c8541a',fontSize:12,alignSelf:'center',marginRight:'auto'}}>
+          ⚠ Red 검증 경고 — 그래도 다운로드 가능 (수정 후 재출력 권장)
+        </span>
+      )}
+      <button className="alt" onClick={() => window.print()}>🖨 인쇄 (Chrome A4)</button>
+      <button onClick={dl}>⬇ Excel 다운로드</button>
     </div>
   );
 }

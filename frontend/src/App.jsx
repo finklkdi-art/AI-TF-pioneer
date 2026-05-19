@@ -59,8 +59,8 @@ export default function App() {
   return (
     <div className="app-shell v2">
       <div className="topbar">
-        <div className="logo">BLUE <span className="nine">NINE</span></div>
-        <div className="tagline">사내 AE 전용 광고 견적서 효율화 솔루션</div>
+        <a className="logo" href="/" title="홈으로" aria-label="홈으로">BLUE <span className="nine">NINE</span></a>
+        <div className="tagline">제일기획 3부문 AE 청구 프로세스 효율화 솔루션</div>
         <div className="spacer" />
         <ModeToggle mode={mode} onChange={setMode} />
         <button

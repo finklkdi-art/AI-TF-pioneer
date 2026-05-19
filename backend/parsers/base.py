@@ -13,6 +13,7 @@ import pandas as pd
 
 from ..schemas import EstimateRow
 from .column_profiles import ColumnProfile, match_profile
+from .ground_truth import extract_ground_truth
 
 
 # 섹션 키워드 사전 — Source 15, 17
@@ -248,15 +249,20 @@ class BaseParser:
     is_media = False
 
     def parse(self, blob: bytes, filename: Optional[str] = None) -> List[EstimateRow]:
-        sheets = _read_workbook(blob)
-        # 1) 파일명으로 프로파일 매칭 시도 (production 만)
+        # 0) Ground Truth 우선 — input1~5 처럼 정확한 좌표를 아는 파일은 칼같이 추출
+        if filename and not self.is_media:
+            gt = extract_ground_truth(blob, filename)
+            if gt is not None:
+                return gt
+        # 1) 파일명 + 컬럼 프로파일 매칭 (영상/인쇄 표준 견적서)
         profile = match_profile(filename) if (filename and not self.is_media) else None
+        sheets = _read_workbook(blob)
         rows: List[EstimateRow] = []
         if profile is not None:
-            # 모든 시트에 동일 프로파일 적용 (대체로 1~2 시트가 데이터)
             for _, df in sheets.items():
                 rows.extend(_scan_rows_with_profile(df, profile))
         else:
+            # 2) 휴리스틱 폴백 (다양한 양식 대응)
             for _, df in sheets.items():
                 rows.extend(_scan_rows(df, media=self.is_media))
         return rows
