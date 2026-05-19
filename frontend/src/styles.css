@@ -322,6 +322,28 @@ table.estimate tr.row-red td { background: rgba(224,83,61,0.07); }
 .monitor {
   font-size: 12px;
 }
+.monitor-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 0 8px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid #e5eaf2;
+}
+.monitor-tick { font-size: 11px; color: var(--muted); }
+.monitor-tick strong { color: var(--navy); font-variant-numeric: tabular-nums; }
+.monitor-refresh {
+  background: var(--navy);
+  color: white;
+  border: 0;
+  border-radius: 999px;
+  padding: 3px 10px;
+  font-size: 11px;
+  cursor: pointer;
+  font-weight: 600;
+}
+.monitor-refresh:hover:not(:disabled) { background: var(--navy-soft); }
+.monitor-refresh:disabled { opacity: 0.6; cursor: not-allowed; }
 .monitor .kv { display: flex; justify-content: space-between; padding: 4px 0; border-bottom: 1px dotted #dde3ee; }
 .monitor .kv:last-child { border-bottom: 0; }
 .monitor .kv .k { color: var(--muted); }
