@@ -123,8 +123,10 @@ GROUND_TRUTH_PROFILES: List[GroundTruthProfile] = [
         key="input3_individual",
         filename_patterns=("input3",),
         sheet_filter="견적서 (개인사업자)",
-        # B19 는 '업체명' 라벨 셀이므로 실제 vendor 값은 C19 에서 추출.
-        vendor_cell="C19", item_cell="C12",         # 업무내용을 항목으로 사용
+        # B19/C19 는 청구인 정보 — 실제 vendor 값은 C19 (라벨 B19='업체명' 오른쪽).
+        # C12 는 캠페인명/Job명 노이즈 (예: '삼성 비스포크 어댑테이션') 이므로 사용 금지.
+        # 실제 '외주비-항목' 인 직종/역할 (예: '성우') 은 C20 에 위치.
+        vendor_cell="C19", item_cell="C20",
         unit_price_cell="F12", quantity_cell="E12", amount_cell="G12",
     ),
 ]
@@ -139,6 +141,100 @@ def find_profile(filename: str) -> Optional[GroundTruthProfile]:
             if pat.lower() in base:
                 return prof
     return None
+
+
+# ─── 직종/역할 키워드 폴백 ──────────────────────────────────
+# input3 (C20='성우') 같은 자유양식 프리랜서/개인사업자 견적서에서, 상단 테이블의
+# 항목 셀이 비어있거나 캠페인명 노이즈일 때 시트 전체에서 직종 키워드를 스캔.
+# 광고 제작 프로세스의 인적 용역명을 우선 매칭.
+ROLE_KEYWORDS: Tuple[str, ...] = (
+    # 영상/제작 PD/감독 계열
+    "PD료", "PD", "프로듀서", "감독", "조감독", "조연출", "AD", "PM",
+    # 촬영 계열
+    "촬영기사", "촬영감독", "촬영조수", "DIT",
+    # 조명 계열
+    "조명감독", "조명기사", "조명조수",
+    # 후반/사운드 계열
+    "성우", "내레이터", "녹음기사", "엔지니어", "믹싱", "음향", "오디오 PD",
+    # 디자인/아트 계열
+    "편집", "에디터", "디자이너", "아트디렉터", "Art Director", "VFX",
+    "2D", "3D", "CG", "DI",
+    # 스타일링 계열
+    "스타일리스트", "메이크업", "헤어", "푸드스타일리스트", "모델",
+)
+
+
+def find_role_in_sheet(df) -> Optional[Tuple[int, int, str]]:
+    """시트 전체에서 직종 키워드 셀 위치를 찾음.
+    스캔 우선순위: (1) 하단부 (개인사업자 양식은 보통 직종이 청구인 정보 근처에 위치)
+                  → 시트 절반 아래 → 위 절반.
+    Returns: (col_idx, row_idx, role_name) or None.
+    """
+    nrows = df.shape[0]
+    half = nrows // 2
+    scan_order = list(range(half, nrows)) + list(range(0, half))
+    for r in scan_order:
+        for c in range(df.shape[1]):
+            try:
+                v = df.iat[r, c]
+            except (IndexError, KeyError):
+                continue
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                continue
+            s = str(v).strip()
+            if not s or len(s) > 20:
+                continue
+            # 정확 일치 또는 짧은 변형 (단어 토큰)
+            s_norm = s.replace(" ", "").lower()
+            for kw in ROLE_KEYWORDS:
+                kw_norm = kw.replace(" ", "").lower()
+                # 정확 매칭 또는 셀 텍스트 == 직종 (라벨 옆 값 케이스)
+                if s == kw or s_norm == kw_norm:
+                    return c, r, s
+                # 라벨이 '직종' 같은 단어이고 그 옆 셀에 키워드가 있는 경우는
+                # 위 정확 매칭으로 잡힘 (s = '성우')
+    return None
+
+
+def extract_with_role_fallback(df, gt_amount_cell: str = "G12",
+                                gt_unit_cell: str = "F12",
+                                gt_qty_cell: str = "E12") -> Optional[EstimateRow]:
+    """직종 키워드 스캔 후, 정해진 단가/수량/금액 셀과 결합해 EstimateRow 생성.
+
+    이 폴백은 input3 같은 양식에 대응 — 상단의 단가/수량/금액 표는 있으나
+    항목명 셀이 캠페인 노이즈인 경우.
+    """
+    found = find_role_in_sheet(df)
+    if not found:
+        return None
+    col_idx, row_idx, role = found
+
+    amount = _to_num(_get_cell(df, gt_amount_cell))
+    unit_price = _to_num(_get_cell(df, gt_unit_cell))
+    qty = _to_num(_get_cell(df, gt_qty_cell)) or 1.0
+    if amount is None or amount == 0:
+        # 금액 표 비어있으면, 직종 셀 같은 행에서 우측 가까운 숫자 셀 탐색
+        for delta_c in range(1, df.shape[1] - col_idx):
+            try:
+                v = df.iat[row_idx, col_idx + delta_c]
+            except (IndexError, KeyError):
+                continue
+            n = _to_num(v)
+            if n is not None and n != 0:
+                amount = n
+                break
+    if amount is None or amount == 0:
+        return None
+
+    return EstimateRow(
+        id=f"r-role-{uuid.uuid4().hex[:6]}",
+        section="외주비",
+        item_name=role,
+        vendor=None,           # 호출자가 vendor 채워 줌
+        unit_price=unit_price if unit_price is not None else (amount / qty if qty else amount),
+        quantity=qty,
+        amount=amount,
+    )
 
 
 def _select_sheet(xl: pd.ExcelFile, name_hint: str) -> Optional[str]:
@@ -174,6 +270,21 @@ def extract_with_ground_truth(blob: bytes, filename: str) -> Optional[List[Estim
 
     if not item_name and section_label:
         item_name = section_label[:60]
+
+    # ── 직종 키워드 폴백: item_cell 이 비어있거나 캠페인 노이즈인 경우 ──
+    # input3 처럼 C12 가 캠페인명만 있고 진짜 항목이 하단(C20='성우')에 있는 경우 대응
+    if not item_name or len(item_name) > 30:        # 30자 초과 = 캠페인 설명문 가능성
+        fallback_row = extract_with_role_fallback(
+            df,
+            gt_amount_cell=prof.amount_cell or "G12",
+            gt_unit_cell=prof.unit_price_cell or "F12",
+            gt_qty_cell=prof.quantity_cell or "E12",
+        )
+        if fallback_row is not None:
+            if vendor:
+                fallback_row.vendor = vendor[:60]
+            return [fallback_row]
+
     if not item_name:
         return []
 
