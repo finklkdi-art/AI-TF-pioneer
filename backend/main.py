@@ -215,6 +215,7 @@ async def estimate_parse(
 
         if ext == "pdf":
             # PDF → LlamaParse + Anthropic 파이프라인 (Source 4 Precise 모드)
+            # 어떤 이유로든 LLM 경로가 실패하면 _local_pdf_to_text() 로 2차 폴백.
             try:
                 pdf_rows, meta = pdf_to_estimate_rows(
                     blob,
@@ -236,10 +237,52 @@ async def estimate_parse(
                 )
                 doc_notes_buf.extend(meta.get("llm_notes", []))
             except Exception as e:
-                sources.append(SourceFileSummary(
-                    filename=fname, role="estimate-pdf", size_bytes=len(blob),
-                    error=f"pdf_pipeline_failed: {e}",
-                ))
+                # 2차 안전망: pdfplumber/pypdf 만으로 텍스트 추출하고, 시맨틱 파서가
+                # 키 있으면 그 텍스트로 다시 분류 시도. 키도 없으면 빈 결과로 graceful 반환.
+                try:
+                    from .services.pdf_pipeline import _local_pdf_to_text
+                    text = _local_pdf_to_text(blob)
+                except Exception:
+                    text = ""
+                rescued = False
+                rescued_rows: List[EstimateRow] = []
+                if text and settings.anthropic_api_key:
+                    try:
+                        from .services.pdf_pipeline import anthropic_markdown_to_rows
+                        extracted = anthropic_markdown_to_rows(
+                            text, category_l1=category_l1,
+                            category_l2=category_l2, mode=mode,
+                        )
+                        for r in extracted.rows:
+                            section = r.section
+                            if category_l1 == "production" and section in ("정가항목", "대행수수료"):
+                                section = "외주비"
+                            rescued_rows.append(EstimateRow(
+                                id=f"r-pdfb-{uuid.uuid4().hex[:8]}",
+                                section=section, item_name=r.item_name[:80],
+                                vendor=r.vendor, unit_price=r.unit_price,
+                                quantity=r.quantity, amount=r.amount, note=r.note,
+                            ))
+                        rescued = True
+                    except Exception:
+                        rescued = False
+                if rescued and rescued_rows:
+                    for r in rescued_rows:
+                        r.source_file = fname
+                    all_rows.extend(rescued_rows)
+                    sources.append(SourceFileSummary(
+                        filename=fname, rows=len(rescued_rows),
+                        role="estimate-pdf-fallback", size_bytes=len(blob),
+                    ))
+                    doc_notes_buf.append(
+                        f"📄 PDF fallback (pdfplumber→Claude) '{fname}' — {len(rescued_rows)} rows"
+                    )
+                else:
+                    # 폴백도 실패 — error 만 surface
+                    sources.append(SourceFileSummary(
+                        filename=fname, role="estimate-pdf", size_bytes=len(blob),
+                        error=f"pdf_pipeline_failed: {e}",
+                    ))
             continue
 
         # 그 외 (xlsx/xls/csv) — 3단계 라우팅:
@@ -404,17 +447,40 @@ def monitor_logs(limit: int = 50):
     return BUS.snapshot(last_n=limit)
 
 
+def _detect_commit() -> str:
+    """Render 가 자동 주입하는 RENDER_GIT_COMMIT 또는 RENDER_GIT_SHA, fallback 으로 'local'."""
+    for key in ("RENDER_GIT_COMMIT", "RENDER_GIT_SHA", "GIT_COMMIT", "COMMIT_SHA", "VERCEL_GIT_COMMIT_SHA"):
+        v = os.environ.get(key)
+        if v:
+            return v[:12]
+    return "local"
+
+
+def _detect_pdf_libs() -> dict:
+    """PDF 처리 라이브러리 가용성 진단 — Render 빌드 상태 확인용."""
+    out = {}
+    for mod in ("llama_parse", "pdfplumber", "pypdf"):
+        try:
+            __import__(mod)
+            out[mod] = "✅"
+        except Exception as e:
+            out[mod] = f"❌ {type(e).__name__}"
+    return out
+
+
 @app.get("/")
 def root():
     return {
         "service": "BLUE NINE",
         "version": app.version,
+        "commit": _detect_commit(),
         "rule_book": "v1.0",
         "memory_only": True,
         "env": settings.env,
         "master_loaded": MASTER.info(),
         "bible_cache": bible_info(),         # 시맨틱 파서가 활용하는 ground truth bible
         "llm": settings.llm_status(),       # 안전 노출 (값 자체는 미공개)
+        "pdf_libs": _detect_pdf_libs(),     # llama_parse / pdfplumber / pypdf 가용성
     }
 
 
