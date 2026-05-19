@@ -31,6 +31,7 @@ from .monitoring import BillingMiddleware, BUS
 from .master_loader import MASTER
 from .parsers import get_parser
 from .parsers.billing_status import parse_billing
+from .parsers.post_process import post_process_rows
 from .services.pdf_pipeline import pdf_to_estimate_rows
 from .jeongga_whitelist import generate_jeongga_rows
 from .validation import evaluate_document, evaluate_triangle
@@ -236,9 +237,9 @@ async def estimate_parse(
                 ))
             continue
 
-        # 그 외 (xlsx/xls/csv) — 휴리스틱 파서
+        # 그 외 (xlsx/xls/csv) — 휴리스틱 파서 (프로파일 매칭 우선)
         try:
-            rows = parser.parse(blob)
+            rows = parser.parse(blob, filename=fname)
             for r in rows:
                 r.source_file = fname
             all_rows.extend(rows)
@@ -251,6 +252,14 @@ async def estimate_parse(
                 error=f"parse_failed: {e}",
             ))
 
+    # ── 후처리 (단위노이즈 / 동의어 dedup / 0행 제거) ──────────────
+    cleaned_rows, pp_stats = post_process_rows(all_rows)
+    doc_notes_buf.append(
+        f"🧹 후처리: 입력 {pp_stats['input']} → 정리 {len(cleaned_rows)}행 "
+        f"(합계행 {pp_stats['dropped_aggregate']}, 단위 {pp_stats['unit_stripped']}, "
+        f"중복병합 {pp_stats['merged_duplicates']}, 0원 {pp_stats['dropped_zero']})"
+    )
+
     # ── 정가항목 주입 (Source 16; 2026-05-19 비즈니스 룰) ─────────
     # 카테고리별 표준 단가 세트 매핑 (영상/인쇄만 보유).
     # media + 그 외 production(radio/btl/other) 은 빈 리스트 → A=0.
@@ -258,7 +267,7 @@ async def estimate_parse(
         generate_jeongga_rows(category_l2, applied_count)
         if category_l1 == "production" else []
     )
-    merged_rows = jeongga_rows + all_rows
+    merged_rows = jeongga_rows + cleaned_rows
 
     doc = EstimateDocument(
         estimate_id=f"est-{uuid.uuid4().hex[:8]}",

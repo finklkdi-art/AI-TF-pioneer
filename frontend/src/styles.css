@@ -506,6 +506,25 @@ footer.foot {
 .medium-label { font-size: 18px; font-weight: 700; color: var(--navy); }
 .medium-template { font-size: 11px; color: var(--muted); margin-top: 4px; }
 
+/* Step 3 — DRM 해제 안내 배너 */
+.drm-banner {
+  max-width: 880px;
+  margin: 14px auto 0;
+  background: linear-gradient(180deg, #fff4e0 0%, #ffe9c2 100%);
+  border: 1.5px solid #e6a44a;
+  border-radius: 12px;
+  padding: 14px 18px;
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  font-size: 13px;
+  color: #5a3a0c;
+  line-height: 1.55;
+  box-shadow: 0 2px 8px rgba(230, 164, 74, 0.15);
+}
+.drm-banner .drm-icon { font-size: 22px; line-height: 1.2; }
+.drm-banner strong { color: #8a3500; }
+
 /* Step 3 — 정가항목 적용 건수 카운터 */
 .applied-count-box {
   max-width: 880px;

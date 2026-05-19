@@ -86,6 +86,16 @@ export default function Step3Upload({ l1, l2, mode, onBack, onAnalyzed }) {
         </p>
       </div>
 
+      <div className="drm-banner">
+        <span className="drm-icon">⚠️</span>
+        <span>
+          <strong>반드시 NASCA DRM 보안을 완전히 해제(🔓 자물쇠 풀림)한 상태의 견적서 파일만 업로드해야 정상 분석이 가능합니다.</strong>
+          <br />
+          DRM 이 걸린 파일은 Excel·PDF 라이브러리가 바이너리를 열 수 없어 파싱 자체가 실패합니다.
+          업로드 전 파일을 Excel/Adobe Reader 로 열어 잠금 표시가 없는지 확인하세요.
+        </span>
+      </div>
+
       <div className="meta-row">
         <label>
           <span>광고주</span>

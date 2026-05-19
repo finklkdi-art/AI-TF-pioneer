@@ -12,6 +12,7 @@ from typing import List, Tuple, Dict, Any, Optional
 import pandas as pd
 
 from ..schemas import EstimateRow
+from .column_profiles import ColumnProfile, match_profile
 
 
 # 섹션 키워드 사전 — Source 15, 17
@@ -154,15 +155,110 @@ def _scan_rows(df: pd.DataFrame, *, media: bool = False) -> List[EstimateRow]:
     return out
 
 
+def _scan_rows_with_profile(df: pd.DataFrame, profile: ColumnProfile) -> List[EstimateRow]:
+    """프로파일 기반 컬럼 매핑 추출.
+
+    각 행에서:
+      - item_name = profile.item_cols 의 텍스트 셀 join
+      - vendor    = profile.vendor_col 값 (있으면)
+      - amount    = profile.amount_col 값 (있으면) / 없으면 profile.num_cols 마지막 숫자
+      - unit_price/quantity = num_cols 에서 amount 앞 두 후보
+    """
+    out: List[EstimateRow] = []
+    for ridx in range(df.shape[0]):
+        row = df.iloc[ridx].tolist()
+        # item_name 합성 — text only
+        name_parts: List[str] = []
+        for ci in profile.item_cols:
+            if ci < len(row):
+                v = row[ci]
+                if v is None or (isinstance(v, float) and pd.isna(v)):
+                    continue
+                s = str(v).strip()
+                if not s:
+                    continue
+                # 항목명 칸에 숫자만 들어있으면 스킵
+                if _to_num(s) is not None:
+                    continue
+                name_parts.append(s)
+        if not name_parts:
+            continue
+        name = " / ".join(name_parts)[:80]
+
+        # vendor (선택)
+        vendor: Optional[str] = None
+        if profile.vendor_col is not None and profile.vendor_col < len(row):
+            v = row[profile.vendor_col]
+            if v is not None and not (isinstance(v, float) and pd.isna(v)):
+                s = str(v).strip()
+                if s and _to_num(s) is None:
+                    vendor = s[:40]
+
+        # 금액 결정 — amount_col 우선, 아니면 num_cols 마지막
+        amount: float = 0.0
+        if profile.amount_col is not None and profile.amount_col < len(row):
+            a = _to_num(row[profile.amount_col])
+            if a is not None:
+                amount = a
+        if amount == 0:
+            for ci in reversed(profile.num_cols):
+                if ci < len(row):
+                    a = _to_num(row[ci])
+                    if a is not None and a != 0:
+                        amount = a
+                        break
+
+        # 수량 / 단가 후보
+        quantity: float = 1.0
+        unit_price: float = 0.0
+        if profile.qty_col is not None and profile.qty_col < len(row):
+            q = _to_num(row[profile.qty_col])
+            if q is not None:
+                quantity = q
+        # num_cols 에서 amount 가 아닌 두 후보 → 첫 = 단가, 둘째 = 수량
+        other_nums = []
+        for ci in profile.num_cols:
+            if ci >= len(row):
+                continue
+            n = _to_num(row[ci])
+            if n is None:
+                continue
+            if profile.amount_col is not None and ci == profile.amount_col:
+                continue
+            other_nums.append(n)
+        if other_nums:
+            unit_price = other_nums[0]
+            if len(other_nums) > 1 and profile.qty_col is None:
+                quantity = other_nums[1] if other_nums[1] else quantity
+
+        out.append(EstimateRow(
+            id=f"r-{uuid.uuid4().hex[:8]}",
+            section="외주비",       # 프로파일은 production input 전제 — 모두 외주비
+            item_name=name,
+            vendor=vendor,
+            unit_price=unit_price,
+            quantity=quantity,
+            amount=amount,
+        ))
+    return out
+
+
 class BaseParser:
     label = "generic"
     is_media = False
 
-    def parse(self, blob: bytes) -> List[EstimateRow]:
+    def parse(self, blob: bytes, filename: Optional[str] = None) -> List[EstimateRow]:
         sheets = _read_workbook(blob)
+        # 1) 파일명으로 프로파일 매칭 시도 (production 만)
+        profile = match_profile(filename) if (filename and not self.is_media) else None
         rows: List[EstimateRow] = []
-        for _, df in sheets.items():
-            rows.extend(_scan_rows(df, media=self.is_media))
+        if profile is not None:
+            # 모든 시트에 동일 프로파일 적용 (대체로 1~2 시트가 데이터)
+            for _, df in sheets.items():
+                rows.extend(_scan_rows_with_profile(df, profile))
+        else:
+            for _, df in sheets.items():
+                rows.extend(_scan_rows(df, media=self.is_media))
         return rows
 
 
