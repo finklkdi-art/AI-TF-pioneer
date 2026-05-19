@@ -108,22 +108,24 @@ export async function updateRow({ estimateId, rowId, patch }) {
 }
 
 export async function exportXlsx(estimateId, filename) {
+  // 변수명 'url' 은 모듈 최상단의 url() 헬퍼와 충돌하므로 로컬에선 다른 이름 사용 (TDZ 회피).
   const sid = await ensureSession();
-  const r = await fetch(url(`/api/estimate/${sid}/${estimateId}/export.xlsx`), {
+  const endpoint = url(`/api/estimate/${sid}/${estimateId}/export.xlsx`);
+  const resp = await fetch(endpoint, {
     method: 'POST',
     headers: { 'X-Blue-Nine-Mode': mode },
   });
-  if (!r.ok) {
-    const t = await r.text().catch(() => '');
-    throw new Error(`Export 실패: ${r.status} ${t}`);
+  if (!resp.ok) {
+    const txt = await resp.text().catch(() => '');
+    throw new Error(`Export 실패: ${resp.status} ${txt}`);
   }
-  const blob = await r.blob();
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = filename || `BLUE_NINE_${estimateId}.xlsx`;
-  a.click();
-  URL.revokeObjectURL(url);
+  const blob = await resp.blob();
+  const downloadUrl = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = downloadUrl;
+  anchor.download = filename || `BLUE_NINE_${estimateId}.xlsx`;
+  anchor.click();
+  URL.revokeObjectURL(downloadUrl);
 }
 
 export async function monitorSummary() { return call('/api/monitor/summary'); }
