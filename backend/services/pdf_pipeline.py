@@ -12,6 +12,7 @@ PDF → 구조화된 EstimateRow 추출 파이프라인 (Source 4 Precise 모드
   - 시스템 프롬프트는 캐시 가능한 stable prefix 로 구성 → 다중 PDF 처리 시 토큰 비용 절감
 """
 from __future__ import annotations
+import io
 import os
 import re
 import tempfile
@@ -26,46 +27,105 @@ from .bible_cache import get_bible_text, get_output_layout
 
 
 # ─────────────────────────────────────────────────────────────
-# Phase 1 — LlamaParse (PDF → markdown)
+# Phase 1 — PDF → markdown (LlamaParse 우선 + pdfplumber/pypdf 폴백)
 # ─────────────────────────────────────────────────────────────
-def llama_parse_pdf_to_markdown(blob: bytes, *, mode: str = "precise", filename: str = "input.pdf") -> str:
-    """LlamaParse 호출. mode 에 따라 fast/precise 분기 (Source 4)."""
-    if not settings.llamaparse_api_key:
-        raise RuntimeError("LLAMAPARSE_API_KEY 미설정 — PDF 파싱 불가")
-
-    # llama-parse 0.5+ : new unified SDK 권장이나 prototype 단계엔 기존 패키지 사용
-    from llama_parse import LlamaParse  # type: ignore[import-untyped]
-
-    # Source 4 매핑:
-    #   fast   → Vision Embedding 신속 스캔  ≈ parse_page_without_llm
-    #   precise→ 전체 OCR + 라인 정밀 교차검증  ≈ parse_page_with_llm (default)
-    parse_mode = "parse_page_without_llm" if mode == "fast" else "parse_page_with_llm"
-
-    parser = LlamaParse(
-        api_key=settings.llamaparse_api_key,
-        result_type="markdown",
-        parse_mode=parse_mode,
-        language="ko",
-        verbose=False,
-        # PDF 가 견적서/표 위주이므로 leaf node 단위로 안 자르고 통째로 받기
-        split_by_page=False,
-    )
-
-    # LlamaParse 는 path 기반 — 임시 파일로 우회 (휘발성 보장: finally 에서 즉시 삭제)
-    suffix = os.path.splitext(filename)[1] or ".pdf"
-    tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+def _local_pdf_to_text(blob: bytes) -> str:
+    """LlamaParse 없이 표준 라이브러리로 PDF 텍스트 추출.
+    pdfplumber → pypdf 순으로 시도. 둘 다 실패하면 빈 문자열.
+    표 구조는 보존되지 않지만 라인 단위 텍스트는 확보 → LLM 컨텍스트로 활용 가능."""
+    # 1) pdfplumber
     try:
-        tmp.write(blob)
-        tmp.flush()
-        tmp.close()
-        documents = parser.load_data(tmp.name)
-    finally:
+        import pdfplumber
+        bio = io.BytesIO(blob)
+        out: list[str] = []
+        with pdfplumber.open(bio) as pdf:
+            for i, page in enumerate(pdf.pages):
+                # 텍스트 우선, 그 다음 표를 markdown-스타일로 직렬화
+                text = page.extract_text() or ""
+                if text.strip():
+                    out.append(f"## Page {i+1}\n{text}")
+                try:
+                    tables = page.extract_tables() or []
+                    for ti, tb in enumerate(tables):
+                        if not tb: continue
+                        rows = ["| " + " | ".join("" if c is None else str(c).strip() for c in r) + " |" for r in tb]
+                        if rows:
+                            sep = "| " + " | ".join("---" for _ in tb[0]) + " |"
+                            out.append(f"### Page {i+1} Table {ti+1}\n" + "\n".join([rows[0], sep, *rows[1:]]))
+                except Exception:
+                    pass
+        text = "\n\n".join(out).strip()
+        if text:
+            return text
+    except ImportError:
+        pass
+    except Exception:
+        pass
+    # 2) pypdf
+    try:
+        from pypdf import PdfReader
+        bio = io.BytesIO(blob)
+        r = PdfReader(bio)
+        chunks = []
+        for i, page in enumerate(r.pages):
+            t = page.extract_text() or ""
+            if t.strip():
+                chunks.append(f"## Page {i+1}\n{t}")
+        return "\n\n".join(chunks).strip()
+    except ImportError:
+        return ""
+    except Exception:
+        return ""
+
+
+def llama_parse_pdf_to_markdown(blob: bytes, *, mode: str = "precise", filename: str = "input.pdf") -> str:
+    """PDF → markdown 변환. 3단계 폴백:
+      ① LlamaParse (키 있고 import 성공 시) — 표 구조까지 정밀 추출
+      ② pdfplumber — 텍스트 + 표 추출 (표 markdown 직렬화)
+      ③ pypdf      — 단순 텍스트 추출
+    어떤 단계든 결과 텍스트가 생기면 그것을 반환. 모두 실패 시 RuntimeError.
+    """
+    # ── ① LlamaParse 시도 (API 키 있을 때만)
+    if settings.llamaparse_api_key:
         try:
-            os.unlink(tmp.name)
-        except OSError:
+            from llama_parse import LlamaParse  # type: ignore[import-untyped]
+            parse_mode = "parse_page_without_llm" if mode == "fast" else "parse_page_with_llm"
+            parser = LlamaParse(
+                api_key=settings.llamaparse_api_key,
+                result_type="markdown",
+                parse_mode=parse_mode,
+                language="ko",
+                verbose=False,
+                split_by_page=False,
+            )
+            suffix = os.path.splitext(filename)[1] or ".pdf"
+            tmp = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+            try:
+                tmp.write(blob); tmp.flush(); tmp.close()
+                documents = parser.load_data(tmp.name)
+            finally:
+                try: os.unlink(tmp.name)
+                except OSError: pass
+            md = "\n\n".join(getattr(d, "text", "") for d in documents).strip()
+            if md:
+                return md
+            # LlamaParse 가 빈 결과 → 폴백
+        except ImportError:
+            # llama_parse 패키지 자체가 없음 — 운영 환경 의존성 누락 시 자동 폴백
+            pass
+        except Exception:
+            # 네트워크/쿼터/타임아웃 등 — 폴백
             pass
 
-    return "\n\n".join(getattr(d, "text", "") for d in documents).strip()
+    # ── ② pdfplumber / ③ pypdf 폴백
+    md = _local_pdf_to_text(blob)
+    if md:
+        return md
+
+    # 어느 추출기도 텍스트를 못 뽑은 경우
+    raise RuntimeError(
+        "PDF 텍스트 추출 실패 — LlamaParse 호출 실패 + pdfplumber/pypdf 도 빈 결과"
+    )
 
 
 # ─────────────────────────────────────────────────────────────

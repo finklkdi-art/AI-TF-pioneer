@@ -13,3 +13,9 @@ fastapi             # 백엔드 웹 프레임워크
 uvicorn[standard]   # ASGI 서버
 python-multipart    # 멀티파트 파일 업로드 지원
 pydantic>=2.0       # 데이터 모델
+python-dotenv       # .env 로컬 로드
+
+# ── LLM 통합 (Precise 모드 — PDF·xlsx 시맨틱 파싱)
+llama-parse==0.6.94 # PDF → markdown (LlamaIndex Cloud)
+anthropic==0.102.0  # Claude API SDK
+tabulate==0.9.0     # DataFrame.to_markdown 의존성
