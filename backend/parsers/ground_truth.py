@@ -24,6 +24,7 @@ from typing import Callable, Dict, List, Optional, Tuple
 import pandas as pd
 
 from ..schemas import EstimateRow
+from .value_filter import is_valid_amount
 
 
 # ─── 셀 좌표 ───────────────────────────────────────────────
@@ -300,8 +301,9 @@ def extract_with_ground_truth(blob: bytes, filename: str) -> Optional[List[Estim
 
     if amount is None and unit_price is not None:
         amount = unit_price * qty
-    if amount is None or amount == 0:
-        return []    # 0/공란 → 노출 안 함
+    # 최상단 룰 — is_valid_amount 가 False 면 빈 결과
+    if not is_valid_amount(amount):
+        return []
 
     row = EstimateRow(
         id=f"r-gt-{uuid.uuid4().hex[:6]}",
@@ -356,9 +358,9 @@ def extract_input5(blob: bytes, filename: str) -> Optional[List[EstimateRow]]:
             continue
         if any(k in joined for k in ("외주항목계", "합계", "총계", "소계", "총합")):
             continue
-        # 금액: 협의 우선, 없으면 사전
-        amount = cur if (cur is not None and cur != 0) else pre
-        if amount is None or amount == 0:
+        # 금액: 협의 우선, 없으면 사전 — 최상단 룰 (is_valid_amount) 강제
+        amount = cur if is_valid_amount(cur) else pre
+        if not is_valid_amount(amount):
             continue
         name_parts = []
         if sec:  name_parts.append(_strip_unit_text(sec))

@@ -14,6 +14,7 @@ import pandas as pd
 from ..schemas import EstimateRow
 from .column_profiles import ColumnProfile, match_profile
 from .ground_truth import extract_ground_truth
+from .value_filter import is_valid_amount, detect_value_column
 
 
 # 섹션 키워드 사전 — Source 15, 17
@@ -38,12 +39,20 @@ def _normalize(s: Any) -> str:
     return re.sub(r"\s+", "", str(s))
 
 
+_PHONE_RE = re.compile(r"\d{2,4}[-\s\.]\d{2,4}[-\s\.]\d{3,4}")
+
+
 def _to_num(v: Any) -> Optional[float]:
+    """텍스트에서 양수 추출. 전화번호/사업자번호 패턴은 거부."""
     if v is None or (isinstance(v, float) and pd.isna(v)):
         return None
     if isinstance(v, (int, float)):
         return float(v)
-    s = re.sub(r"[^\d.\-]", "", str(v))
+    raw = str(v).strip()
+    # 전화번호/사업자번호 — 금액 아님
+    if _PHONE_RE.search(raw):
+        return None
+    s = re.sub(r"[^\d.\-]", "", raw)
     if s in ("", "-", ".", "-."):
         return None
     try:
@@ -77,14 +86,18 @@ def _classify_section(row_text: str, *, media: bool = False) -> Optional[str]:
 def _scan_rows(df: pd.DataFrame, *, media: bool = False) -> List[EstimateRow]:
     """행 단위 휴리스틱 추출.
 
+    [최상단 룰 — 2026-05-19 금액 유효성 필터]
+      거래가격/견적금액/단가 헤더 컬럼을 자동 감지해, 해당 칸이 '유효 금액'
+      (None / NaN / 0 / 공란 / N/A / '-' 등 모두 무효) 인 행만 추출.
+      매칭 없으면 last-numeric fallback. 어느 쪽이든 amount > 0 인 행만 통과.
+
     [Section 분류 규칙 — 2026-05-19 화이트리스트 강제]
-      · production 카테고리:
-          item_name 이 backend/jeongga_whitelist 의 6개 항목과 매칭되면 '정가항목',
-          그 외 모든 행은 '외주비' 로 격리.
-          → 섹션 헤더('정가합계', '외주비합계' 등) 키워드는 더 이상 분류에 영향을 주지 않음.
-      · media 카테고리:
-          기존 헤더 휴리스틱 유지 — '매체청구액 / 매체지급액 / 매체수수료'.
+      · production: 모든 행 '외주비' (정가는 시스템 자동 주입)
+      · media     : 헤더 키워드 기반 (매체청구액/지급액/수수료)
     """
+    # 최상단 — value column 감지 (오른쪽 컬럼 우선)
+    value_col = detect_value_column(df)
+
     out: List[EstimateRow] = []
     current_section = "매체청구액" if media else None    # production 은 행별로 결정
 
@@ -100,8 +113,24 @@ def _scan_rows(df: pd.DataFrame, *, media: bool = False) -> List[EstimateRow]:
             if sect:
                 current_section = sect
 
-        # 숫자 후보
-        nums = [(j, _to_num(v)) for j, v in enumerate(row.tolist()) if _to_num(v) is not None]
+        # 최상단 게이트 — STRICT: value_col 이 감지됐다면 그 컬럼만 유일한 진실.
+        # value_col 이 비어있거나 무효이면 그 행 자체를 즉시 건너뜀.
+        row_list = row.tolist()
+        primary_amount = None
+        if value_col is not None:
+            if value_col >= len(row_list):
+                continue
+            if not is_valid_amount(row_list[value_col]):
+                continue                              # 빈 서식 행 — 추출 안 함
+            primary_amount = _to_num(row_list[value_col])
+        else:
+            # value_col 미감지 — last-numeric fallback. 적어도 한 개 유효 금액 있어야.
+            nums_pre = [_to_num(v) for v in row_list if _to_num(v) is not None]
+            if not nums_pre or not any(is_valid_amount(n) for n in nums_pre):
+                continue
+
+        # 숫자 후보 (지금은 통과한 행에 대해서만 계산)
+        nums = [(j, _to_num(v)) for j, v in enumerate(row_list) if _to_num(v) is not None]
         if len(nums) < 1:
             continue
 
@@ -124,16 +153,25 @@ def _scan_rows(df: pd.DataFrame, *, media: bool = False) -> List[EstimateRow]:
         if any(k in name for k in ("합계", "총계", "소계", "총합", "Total", "TOTAL")):
             continue
 
-        # 마지막 숫자를 amount, 그 앞을 unit_price/quantity 후보로
-        amount = nums[-1][1] or 0.0
+        # amount 결정: value_col 우선, 없으면 last numeric
+        if primary_amount is not None and primary_amount > 0:
+            amount = primary_amount
+            # value_col 좌측의 숫자들을 단가/수량 후보로
+            left_nums = [n for j, n in nums if j < (value_col or 999)]
+        else:
+            amount = nums[-1][1] or 0.0
+            left_nums = [n for _, n in nums[:-1]]
         unit_price = 0.0
         quantity = 1.0
-        if len(nums) >= 3:
-            unit_price = nums[-3][1] or 0.0
-            quantity = nums[-2][1] or 1.0
-        elif len(nums) == 2:
-            unit_price = nums[-2][1] or 0.0
-            quantity = 1.0
+        if len(left_nums) >= 2:
+            unit_price = left_nums[-2] or 0.0
+            quantity = left_nums[-1] or 1.0
+        elif len(left_nums) == 1:
+            unit_price = left_nums[0] or 0.0
+
+        # ── 최종 게이트 — amount 가 0 이면 절대 노출 안 함
+        if not amount or amount <= 0:
+            continue
 
         # ── 섹션 결정 ─────────────────────────────────────────────
         # 2026-05-19 비즈니스 룰: 정가항목은 input 파일에 존재하지 않음.
@@ -232,6 +270,9 @@ def _scan_rows_with_profile(df: pd.DataFrame, profile: ColumnProfile) -> List[Es
             if len(other_nums) > 1 and profile.qty_col is None:
                 quantity = other_nums[1] if other_nums[1] else quantity
 
+        # 최상단 게이트 — 유효 금액이 아니면 노출 안 함
+        if not is_valid_amount(amount):
+            continue
         out.append(EstimateRow(
             id=f"r-{uuid.uuid4().hex[:8]}",
             section="외주비",       # 프로파일은 production input 전제 — 모두 외주비
