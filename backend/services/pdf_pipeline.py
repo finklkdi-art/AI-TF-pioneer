@@ -22,6 +22,7 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..schemas import EstimateRow
+from .bible_cache import get_bible_text, get_output_layout
 
 
 # ─────────────────────────────────────────────────────────────
@@ -92,8 +93,70 @@ class LLMExtractedRows(BaseModel):
     notes: List[str] = Field(default_factory=list, description="AE 가 참고할 만한 메모")
 
 
+_SYSTEM_PROMPT_CORE = """\
+당신은 한국 광고대행사가 받은 협력사 견적서 (PDF/Excel 표 markdown 직렬화) 를 분석해
+라인아이템을 구조화 추출하는 시맨틱 파서입니다. 셀 좌표가 아닌 **비즈니스 의도** 로
+파싱합니다.
+
+[1단계 — 의도 분류 (Intent Taxonomy)]
+입력 문서의 각 행/블록에 대해 먼저 아래 분류 중 하나를 머릿속에서 결정:
+  · 인적 용역  : 성우/모델/PD/감독/조감독/편집·믹싱·CG 작업자 등 사람의 일
+  · 장비 대여  : 카메라/조명/스튜디오/이동차/특수기자재
+  · 후반 작업  : DI/Editing/2D/3D/VFX/녹음
+  · 수수료    : 대행수수료/위탁수수료 → ❌ 절대 추출 금지 (시스템 자동 산입)
+  · 합계·소계 : 합계/소계/총계/VAT/부가세 → ❌ 절대 추출 금지
+  · 정가항목  : 기획료/카피료/크리에이티브 워크료/디렉션료/자료조사비 → ❌ 절대 추출 금지
+              (이 6종은 input 파일에 존재하지 않음 — AE 가 별도 입력)
+처음 4개 분류만 추출 대상 = 모두 '외주비' 섹션.
+
+[2단계 — 엔티티 묶음 (Entity Grouping)]
+표가 정형이 아닐 경우 (개인사업자/프리랜서 자유양식 등):
+  · 같은 행 정렬, 협력사명 인접, 비고란 텍스트 등을 모두 활용해
+    [item_name (직종/업무) + vendor + unit_price + quantity + amount] 을 한 묶음으로.
+  · 캠페인명 (예: '삼성 비스포크 어댑테이션') 은 절대 item_name 으로 쓰지 말 것.
+    실제 외주비 항목은 직종/역할 키워드 (성우/모델/녹음기사/편집/믹싱/PD 등).
+
+[3단계 — 자가 보정 (Self-Correction)]
+  · 만약 unit_price × quantity ≠ amount 면:
+      → 비고/산출물/세부내역 컬럼에서 "녹음 3건", "1분 이상 3편" 같은 수량 단서 재탐색.
+      → 텍스트의 정수를 quantity 로 역산. 그래도 안 맞으면 amount 를 정답으로 두고
+        unit_price = amount / quantity 로 재계산.
+  · quantity 가 0 또는 공란인데 amount 가 있으면 비고에서 같은 방식으로 역산.
+
+[4단계 — 정제 룰]
+  · 단위 텍스트 ('명/건/식/편/회/일/팀/개/인/시간/벌') 가 item_name 에 섞이면 제거.
+  · vendor 가 라벨 셀의 값 (예: '업체명') 이면 다음 셀의 진짜 회사명 사용.
+  · 금액 0/공란 행은 추출 금지.
+  · 동일 의미 항목 (Editing↔편집, 프로듀싱료↔PD료, 녹음실비↔녹음) 은 한 번만, amount 합산.
+
+[5단계 — 출력 구조 강제 (Reference Output 레이아웃)]
+출력은 '외주비' 섹션 하나로만 채움. 정가항목과 대행수수료는 시스템이 따로 처리.
+JSON 으로만 응답.
+"""
+
+
+def _build_system_prompt() -> str:
+    bible = get_bible_text()
+    layout = get_output_layout()
+    parts = [_SYSTEM_PROMPT_CORE]
+    if bible:
+        parts.append(
+            "[Ground Truth — 제작단가기준집 (참고용, 의도 분류에만 활용)]\n"
+            "아래 정가 항목들은 input 파일에 등장하지 않음. 등장해도 무시.\n"
+            f"```\n{bible[:6000]}\n```"
+        )
+    if layout:
+        parts.append(
+            "[Reference Output 레이아웃 — 외주비 섹션 출력 패턴]\n"
+            f"```\n{layout[:2500]}\n```"
+        )
+    return "\n\n".join(parts)
+
+
+# Backwards-compat for callers that read _SYSTEM_PROMPT directly
 _SYSTEM_PROMPT = """\
-당신은 한국 광고대행사가 받은 협력사 견적서 PDF 를 분석해 라인아이템을 구조화 추출하는 분석가입니다.
+(deprecated stub — actual prompt is built dynamically by _build_system_prompt())
+당신은 한국 광고대행사가 받은 협력사 견적서를 분석해 라인아이템을 구조화 추출하는 분석가입니다.
 
 [★★ 핵심 비즈니스 룰 ★★]
   · input PDF 에는 '정가항목' (기획료/카피료/크리에이티브 워크료/디렉션료/자료조사비/제작진행비) 이
@@ -157,13 +220,14 @@ def anthropic_markdown_to_rows(
     )
 
     # messages.parse + Pydantic 으로 스키마 강제 + 자동 검증
-    # cache_control 로 system prompt 캐싱 (반복 PDF 처리 시 ~90% 비용 절감)
+    # cache_control 로 system prompt 캐싱 (반복 호출 시 ~90% 비용 절감)
+    system_prompt = _build_system_prompt()
     response = client.messages.parse(
         model=settings.anthropic_model,            # .env 의 ANTHROPIC_MODEL (default: claude-sonnet-4-6)
         max_tokens=8192,
         system=[{
             "type": "text",
-            "text": _SYSTEM_PROMPT,
+            "text": system_prompt,
             "cache_control": {"type": "ephemeral"},
         }],
         messages=[{"role": "user", "content": user_msg}],

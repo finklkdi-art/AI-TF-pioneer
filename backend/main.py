@@ -33,6 +33,8 @@ from .parsers import get_parser
 from .parsers.billing_status import parse_billing
 from .parsers.post_process import post_process_rows
 from .services.pdf_pipeline import pdf_to_estimate_rows
+from .services.semantic_parser import semantic_parse_xlsx
+from .services.bible_cache import init_bible_cache, info as bible_info
 from .jeongga_whitelist import generate_jeongga_rows
 from .validation import evaluate_document, evaluate_triangle
 from .exporter import build_xlsx
@@ -72,6 +74,9 @@ def _startup() -> None:
     # Source 16, 36 — '제작단가기준집.pdf' 마스터 메모리 적재
     cnt = MASTER.load()
     print(f"[BLUE NINE] master items loaded: {cnt}")
+    # Bible 캐시 — 제작단가기준집 텍스트 + output.xlsx 레이아웃을 LLM 시스템 프롬프트에 주입
+    bi = init_bible_cache()
+    print(f"[BLUE NINE] bible cache: {bi}")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -237,14 +242,28 @@ async def estimate_parse(
                 ))
             continue
 
-        # 그 외 (xlsx/xls/csv) — 휴리스틱 파서 (프로파일 매칭 우선)
+        # 그 외 (xlsx/xls/csv) — 3단계 라우팅:
+        #   ① ground truth (input1~5 의 학습 좌표)
+        #   ② 시맨틱 파서 (xlsx → markdown → Claude 의도 추론)  — 키 있을 때만
+        #   ③ 휴리스틱 (column profile + heuristic _scan_rows)
         try:
+            # ① ground truth 우선
             rows = parser.parse(blob, filename=fname)
+            role = "estimate"
+            # ② ground truth 가 0행이고 (휴리스틱도 노이즈 가능성) Anthropic 키가 있으면 시맨틱 시도
+            if (not rows or len(rows) == 0) and category_l1 == "production":
+                sem = semantic_parse_xlsx(
+                    blob, filename=fname,
+                    category_l1=category_l1, category_l2=category_l2, mode=mode,
+                )
+                if sem is not None and len(sem) > 0:
+                    rows = sem
+                    role = "estimate-semantic"
             for r in rows:
                 r.source_file = fname
             all_rows.extend(rows)
             sources.append(SourceFileSummary(
-                filename=fname, rows=len(rows), role="estimate", size_bytes=len(blob),
+                filename=fname, rows=len(rows), role=role, size_bytes=len(blob),
             ))
         except Exception as e:
             sources.append(SourceFileSummary(
@@ -394,6 +413,7 @@ def root():
         "memory_only": True,
         "env": settings.env,
         "master_loaded": MASTER.info(),
+        "bible_cache": bible_info(),         # 시맨틱 파서가 활용하는 ground truth bible
         "llm": settings.llm_status(),       # 안전 노출 (값 자체는 미공개)
     }
 
