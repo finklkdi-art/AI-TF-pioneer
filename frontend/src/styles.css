@@ -229,6 +229,11 @@ table.estimate tr.section-head td {
   font-weight: 700;
   color: var(--navy);
 }
+table.estimate tr.section-subtotal td {
+  background: #f4f8fd;
+  border-top: 2px solid var(--navy);
+  color: var(--navy);
+}
 table.estimate td.num { text-align: right; font-variant-numeric: tabular-nums; }
 table.estimate input.cell-num {
   width: 100%;

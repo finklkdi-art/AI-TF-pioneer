@@ -93,8 +93,11 @@ def build_xlsx(doc: EstimateDocument) -> bytes:
             ws.cell(row=r, column=8, value=row.note or "").border = BORDER
             r += 1
         end_amount_row = r - 1
-        # 섹션 소계
-        sub = ws.cell(row=r, column=2, value=f"{sec} 소계")
+        # 섹션 소계 — 알파벳 기호(A/B/C) 부여
+        SECTION_LETTER = {"정가항목": "A", "외주비": "B", "대행수수료": "C"}
+        letter = SECTION_LETTER.get(sec, "")
+        sub_label = f"{sec} 소계 ({letter})" if letter else f"{sec} 소계"
+        sub = ws.cell(row=r, column=2, value=sub_label)
         sub.font = Font(bold=True)
         sub.alignment = Alignment(horizontal="right")
         sub.fill = TOTAL_FILL

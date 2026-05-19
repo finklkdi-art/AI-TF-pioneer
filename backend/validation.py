@@ -69,52 +69,39 @@ def _close(a: float, b: float) -> bool:
 def evaluate_row(row: EstimateRow) -> EstimateRow:
     """
     한 행에 대한 신호등 판정 + confidence 산출.
+
+    [2026-05-19 완화 정책]
+    - 기본값은 GREEN. 신호등은 '꼭 확인이 필요한' 예외 케이스에서만 점등.
+    - 정가항목은 회사 표준 단가에서 자동 주입된 신뢰 가능한 행이므로 기본 GREEN.
+    - 외주비는 단가×수량 ≠ 금액 (산술 오류) 일 때만 RED.
+    - 자동 합성행 (대행수수료 등) 은 항상 GREEN.
     """
     light: LightColor = "green"
     conf = 0.99
     reasons: List[str] = []
 
+    # 자동 합성/주입 행은 별도 검증 없이 GREEN
+    if row.id.startswith("r-jeongga-") or row.id.startswith("r-fee-auto-"):
+        row.confidence = 0.99
+        row.light = "green"
+        row.reasoning = "표준 단가/공식 기반 자동 산출"
+        return row
+
+    # 산술 검증: 단가 × 수량 ≈ 금액 — 어긋나면 RED (꼭 확인 필요)
     qty = row.quantity if row.quantity not in (None, 0) else 1.0
     expected = (row.unit_price or 0.0) * qty
-    if not _close(expected, row.amount):
-        # 단가*수량과 합계 불일치 — 빨강
+    if row.amount > 0 and not _close(expected, row.amount):
         light = "red"
-        conf = min(conf, 0.70)
+        conf = min(conf, 0.85)
         reasons.append(
-            f"수식오류: 단가({row.unit_price:,.0f}) × 수량({qty:g}) = {expected:,.0f} ≠ 금액({row.amount:,.0f})"
+            f"수식 점검: 단가({row.unit_price:,.0f}) × 수량({qty:g}) = {expected:,.0f} ≠ 금액({row.amount:,.0f})"
         )
 
-    # 정가항목 행은 마스터 매칭 확인
-    master_hit = MASTER.find(row.item_name) if row.section == "정가항목" else None
-    if row.section == "정가항목":
-        if master_hit and master_hit.unit_price is not None:
-            if not _close(master_hit.unit_price, row.unit_price):
-                # 정가 기준과 단가 차이
-                light = "yellow" if light != "red" else "red"
-                conf = min(conf, 0.92)
-                reasons.append(
-                    f"정가기준 단가({master_hit.unit_price:,.0f}) 와 입력 단가({row.unit_price:,.0f}) 불일치"
-                )
-            else:
-                reasons.append("제작단가기준집과 단가 일치")
-        else:
-            light = "yellow" if light != "red" else "red"
-            conf = min(conf, 0.92)
-            reasons.append("정가기준 항목 매칭 실패 — 카테고리 모호")
-
-    # 항목명에 '편집' 같은 모호 키워드만 있을 경우 yellow
-    if light == "green" and row.item_name:
-        ambiguous = ["편집", "촬영", "디자인", "기타"]
-        if any(row.item_name.strip() == k for k in ambiguous):
-            light = "yellow"
-            conf = min(conf, 0.93)
-            reasons.append("항목명 모호 — AI 추론 매핑 필요")
-
-    # 필수 누락 — 외주비에서 단가/수량이 모두 0이면 위험
-    if row.section == "외주비" and row.unit_price == 0 and row.amount == 0:
-        light = "yellow" if light == "green" else light
-        conf = min(conf, 0.91)
-        reasons.append("외주비 단가/금액 모두 0 — 입력 누락 가능")
+    # 외주비 0금액 누락 (post-process 가 제거하지만 안전망)
+    if row.section == "외주비" and row.amount == 0 and row.unit_price == 0:
+        light = "yellow"
+        conf = min(conf, 0.92)
+        reasons.append("외주비 금액 0 — 입력 누락 가능")
 
     row.confidence = conf
     row.light = light
@@ -162,6 +149,8 @@ def evaluate_document(doc: EstimateDocument) -> EstimateDocument:
     if doc.category_l1 == "production" and c_manual == 0 and b > 0:
         outsourcing_rows = [r for r in doc.rows if r.section == "외주비"]
         fee_amount, eff_rate = calculate_agency_fee(outsourcing_rows)
+        formula_label = f"(C) = (B) × {eff_rate*100:.2f}%"
+        formula_full  = f"{formula_label} = {b:,.0f} × {eff_rate*100:.2f}% = {fee_amount:,.0f}"
         fee_row = EstimateRow(
             id=f"{_FEE_ROW_ID_PREFIX}{uuid.uuid4().hex[:6]}",
             section="대행수수료",
@@ -170,16 +159,14 @@ def evaluate_document(doc: EstimateDocument) -> EstimateDocument:
             quantity=1.0,
             amount=fee_amount,
             source_file="(자동 계산)",
-            note=f"외주비 합계 {b:,.0f} × {eff_rate*100:.2f}%",
+            note=formula_full,
             confidence=1.0,
             light="green",
-            reasoning=f"자동 산출: 외주비 {b:,.0f} × {eff_rate*100:.2f}% = {fee_amount:,.0f}",
+            reasoning=formula_full,
         )
         doc.rows.append(fee_row)
         c_total = fee_amount
-        doc.notes.append(
-            f"⚡ 대행수수료 자동 산입: 외주비 {b:,.0f} × {DEFAULT_AGENCY_FEE_RATE*100:.2f}% = {fee_amount:,.0f}"
-        )
+        doc.notes.append(f"⚡ 대행수수료 자동 산입: {formula_full}")
     else:
         c_total = c_manual
 

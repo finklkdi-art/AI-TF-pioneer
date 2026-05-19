@@ -5,9 +5,27 @@ import { updateRow } from '../api.js';
 const SECTION_ORDER_PRODUCTION = ['정가항목', '외주비', '대행수수료'];
 const SECTION_ORDER_MEDIA = ['매체청구액', '매체지급액', '매체수수료'];
 
+// 섹션별 알파벳 기호 (소계 라벨용)
+const SECTION_LETTER = {
+  '정가항목': 'A',
+  '외주비': 'B',
+  '대행수수료': 'C',
+};
+
 function fmt(n) {
   if (n == null || isNaN(n)) return '';
   return Math.round(n).toLocaleString('ko-KR');
+}
+
+// 섹션별 공식 안내문 (대행수수료 row 의 공식 표기)
+function formulaForSection(sec, doc) {
+  if (sec === '대행수수료') {
+    // doc.rows 에서 자동 산입된 대행수수료 행의 reasoning 을 우선 사용
+    const feeRow = (doc.rows || []).find(r => r.section === '대행수수료' && r.reasoning?.includes('(C)'));
+    if (feeRow) return feeRow.reasoning;
+    return `(C) = (B) × 17.65% = ${fmt(doc.sum_outsourcing)} × 17.65% = ${fmt(doc.sum_agency_fee)}`;
+  }
+  return null;
 }
 
 function Light({ color }) {
@@ -142,6 +160,25 @@ export default function EstimateSheet({ doc, onUpdated }) {
                   )}
                 </React.Fragment>
               ))}
+              {/* 섹션별 소계 행 (A/B/C 라벨 + 콤마 포맷 + 공식 노출) */}
+              {SECTION_LETTER[sec] && (() => {
+                const subtotal = rows.reduce((acc, r) => acc + (r.amount || 0), 0);
+                const formula = formulaForSection(sec, doc);
+                return (
+                  <tr className="section-subtotal">
+                    <td colSpan={2} style={{fontWeight:700}}>
+                      {sec} 소계 ({SECTION_LETTER[sec]})
+                    </td>
+                    <td colSpan={3} style={{fontSize:11,color:'#6b7891',fontStyle:'italic'}}>
+                      {formula || ''}
+                    </td>
+                    <td className="num" style={{fontWeight:700,fontSize:13.5}}>
+                      {fmt(subtotal)}
+                    </td>
+                    <td colSpan={2} />
+                  </tr>
+                );
+              })()}
             </React.Fragment>
           ))}
         </tbody>
