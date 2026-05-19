@@ -23,7 +23,7 @@ from pydantic import BaseModel, Field
 
 from ..config import settings
 from ..schemas import EstimateRow
-from .bible_cache import get_bible_text, get_output_layout
+from .bible_cache import get_bible_text, get_output_layout, get_template_for_purpose
 from .intent_classifier import classify_purpose, format_purpose_context_for_llm
 
 
@@ -280,20 +280,30 @@ def anthropic_markdown_to_rows(
 
     client = anthropic.Anthropic(api_key=settings.anthropic_api_key)
 
-    # STEP 1+2 — 청구 목적 분류 + 템플릿 엔티티 컨텍스트
+    # STEP 1+2 — 청구 목적 분류 + 템플릿 엔티티 + 표준 시트 컨텍스트
     purpose_rep = classify_purpose(markdown)
     purpose_block = format_purpose_context_for_llm(purpose_rep)
+    template_md = get_template_for_purpose(purpose_rep.primary)
+    template_block = (
+        f"\n\n[STEP 2 (확장) — 판별된 목적 '{purpose_rep.primary}' 에 해당하는 "
+        f"reference 표준 견적서 양식]\n"
+        f"아래는 사내 표준 견적서 시트입니다. 컬럼/항목 구조를 참고해 input 데이터를 "
+        f"표준 양식 칸에 매핑한 형태로 추출하세요.\n"
+        f"```\n{template_md[:3000]}\n```"
+    ) if template_md else ""
 
     user_msg = (
         f"카테고리: {category_l1} / {category_l2}\n"
         f"처리 모드: {mode}\n\n"
-        f"{purpose_block}\n\n"
+        f"{purpose_block}"
+        f"{template_block}\n\n"
         f"[소스 문서 markdown — 시작]\n"
         f"{markdown}\n"
         f"[소스 문서 markdown — 끝]\n\n"
-        f"위 [STEP 1] 결과의 청구 목적과 [STEP 2] 표준 엔티티를 우선시하여, "
+        f"위 [STEP 1] 청구 목적 + [STEP 2] 표준 엔티티/양식 을 기준으로, "
         f"의미가 매칭되는 라인아이템만 인용해 JSON 으로 추출하세요. "
-        f"인접 셀의 텍스트를 임의로 끌어오지 말고, 의미 매칭이 명확한 것만 포함."
+        f"인접 셀의 텍스트를 임의로 끌어오지 말고, 의미 매칭이 명확한 것만 포함. "
+        f"단가/수량 칸이 비어있고 금액만 있다면 'unit=금액, qty=1' 로 sanitize 하여 채울 것."
     )
 
     # messages.parse + Pydantic 으로 스키마 강제 + 자동 검증

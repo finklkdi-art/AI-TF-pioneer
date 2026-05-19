@@ -160,20 +160,30 @@ def post_process_rows(rows: List[EstimateRow]) -> Tuple[List[EstimateRow], dict]
 
     merged = list(bucket.values())
 
-    # 5) Output 양식 동기화 sanitize + 0 행 제거
-    # "성우료 1,500,000" 처럼 unit/qty 없이 amount 만 있는 경우 자동 보정.
+    # 5) STEP 3 — Output 양식 동기화 sanitize + Self-Correction + 0 행 제거.
+    #    (a) "성우료 1,500,000" 처럼 unit/qty 없이 amount 만 있으면 'qty=1 / unit=amount' 자동 보정
+    #    (b) unit × qty ≠ amount 산술 불일치 시 금액을 정답으로 두고 단가 역산
+    #        → 의도 중심 파이프라인: '금액' 이 가장 신뢰할 수 있는 단일 진실
     stats["sanitized"] = 0
+    stats["recomputed"] = 0
     final: List[EstimateRow] = []
     for r in merged:
         if not r.amount or r.amount == 0:
             stats["dropped_zero"] += 1
             continue
+        # (a) 누락 값 채움
         if not r.quantity or r.quantity == 0:
             r.quantity = 1.0
             stats["sanitized"] += 1
         if not r.unit_price or r.unit_price == 0:
             r.unit_price = r.amount / (r.quantity or 1.0)
             stats["sanitized"] += 1
+        # (b) 곱셈 불일치 자가 보정 (단가 재계산)
+        expected = (r.unit_price or 0.0) * (r.quantity or 1.0)
+        tol = max(0.5, 1e-4 * max(abs(expected), abs(r.amount), 1.0))
+        if abs(expected - r.amount) > tol and r.quantity:
+            r.unit_price = r.amount / r.quantity
+            stats["recomputed"] += 1
         final.append(r)
 
     # 다른 섹션(정가/대행수수료) + 정리된 외주비

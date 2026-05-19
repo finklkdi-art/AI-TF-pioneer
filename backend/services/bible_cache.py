@@ -17,7 +17,26 @@ from ..config import settings
 
 _BIBLE_TEXT: str = ""
 _OUTPUT_LAYOUT: str = ""
+_PURPOSE_TEMPLATES: dict[str, str] = {}      # purpose key → 표준 시트 markdown
 _LOADED: bool = False
+
+
+# Purpose → 시트명 hint 매핑 (intent_classifier.PURPOSE_KEYWORDS 와 정렬)
+PURPOSE_TO_SHEET_HINTS: dict[str, tuple[str, ...]] = {
+    "AUDIO":         ("녹음 표준견적서", "녹음", "Recording"),
+    "DI_NTC":        ("포스트프로덕션", "DI", "NTC", "Telecine"),
+    "EDIT_2D_3D":    ("포스트프로덕션", "편집", "Editing", "합성"),
+    "CF_PRODUCTION": ("CF프로덕션 표준견적서", "CF프로덕션", "프로덕션"),
+    "PD_FEE":        ("PD 표준견적서", "PD"),
+}
+
+# 표준 시트들을 가져올 후보 파일 (우선순위 순)
+_TEMPLATE_SOURCE_FILES: tuple[str, ...] = (
+    "영상제작비견적서2.xlsx",
+    "input1.xlsx",
+    "input2.xlsx",
+    "영상제작비견적서1.xlsx",
+)
 
 
 def _read_ref_dir() -> Path:
@@ -77,14 +96,47 @@ def _load_xlsx_layout(path: Path, max_rows: int = 30) -> str:
         return ""
 
 
+def _load_purpose_templates(ref_dir: Path) -> dict[str, str]:
+    """reference 파일들 중 표준 시트를 찾아 purpose 별 markdown 으로 캐싱."""
+    import pandas as pd
+    out: dict[str, str] = {}
+    for src_name in _TEMPLATE_SOURCE_FILES:
+        p = ref_dir / src_name
+        if not p.exists():
+            continue
+        try:
+            xl = pd.ExcelFile(p)
+        except Exception:
+            continue
+        for sh in xl.sheet_names:
+            for purpose, hints in PURPOSE_TO_SHEET_HINTS.items():
+                if purpose in out:
+                    continue                       # 첫 매칭 우선
+                if not any(h in sh for h in hints):
+                    continue
+                try:
+                    df = pd.read_excel(xl, sheet_name=sh, header=None, nrows=20).fillna("")
+                    try:
+                        md = df.to_markdown(index=False)
+                    except Exception:
+                        md = df.to_string(index=False)
+                    out[purpose] = f"### 표준 견적서 시트: {sh}  (출처: {src_name})\n\n{md}"
+                except Exception:
+                    pass
+        if len(out) >= len(PURPOSE_TO_SHEET_HINTS):
+            break
+    return out
+
+
 def init_bible_cache() -> dict:
     """앱 부팅 시 호출. 멱등 — 두 번 호출돼도 안전."""
-    global _BIBLE_TEXT, _OUTPUT_LAYOUT, _LOADED
+    global _BIBLE_TEXT, _OUTPUT_LAYOUT, _PURPOSE_TEMPLATES, _LOADED
     if _LOADED:
         return info()
     ref = _read_ref_dir()
     _BIBLE_TEXT = _load_pdf_text(ref / settings.master_pdf)
     _OUTPUT_LAYOUT = _load_xlsx_layout(ref / "output.xlsx")
+    _PURPOSE_TEMPLATES = _load_purpose_templates(ref)
     _LOADED = True
     return info()
 
@@ -94,6 +146,7 @@ def info() -> dict:
         "loaded": _LOADED,
         "bible_chars": len(_BIBLE_TEXT),
         "output_layout_chars": len(_OUTPUT_LAYOUT),
+        "purpose_templates": {k: len(v) for k, v in _PURPOSE_TEMPLATES.items()},
     }
 
 
@@ -103,3 +156,8 @@ def get_bible_text() -> str:
 
 def get_output_layout() -> str:
     return _OUTPUT_LAYOUT
+
+
+def get_template_for_purpose(purpose: str) -> str:
+    """STEP 2 — 판별된 purpose 에 대응하는 표준 견적서 시트 markdown 반환."""
+    return _PURPOSE_TEMPLATES.get(purpose, "")
